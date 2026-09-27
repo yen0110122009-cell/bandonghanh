@@ -44,7 +44,6 @@ DEFAULT_SUBJECTS = [
 
 # --- DỮ LIỆU CỬA HÀNG (SHOP) ---
 SHOP_ITEMS = {
- SHOP_ITEMS = {
     "1": {"name": "❄️ Thẻ Đóng Băng Streak", "price": 100, "desc": "Bảo toàn chuỗi học tập liên tục của bạn khi nghỉ 1 ngày"}
 }
 # --- DATABASE TỔNG HỢP ---
