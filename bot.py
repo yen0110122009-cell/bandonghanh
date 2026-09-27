@@ -42,10 +42,376 @@ DEFAULT_SUBJECTS = [
     "Kỹ Năng Mềm / Tiếng Anh Chuyên Ngành", "Tự do"
 ]
 
-# --- DỮ LIỆU CỬA HÀNG (SHOP) ---
+# ============================================================
+# 📦 MYSTERY GACHA BOX - HỘP QUÀ NHÂN PHẨM
+# ============================================================
+
+import random
+
+
+# ============================================================
+# 🛒 DỮ LIỆU CỬA HÀNG
+# ============================================================
+
 SHOP_ITEMS = {
-    "1": {"name": "❄️ Thẻ Đóng Băng Streak", "price": 100, "desc": "Bảo toàn chuỗi học tập liên tục của bạn khi nghỉ 1 ngày"}
+    "1": {
+        "name": "❄️ Thẻ Đóng Băng Streak",
+        "price": 100,
+        "desc": "Bảo toàn chuỗi học tập liên tục của bạn khi nghỉ 1 ngày."
+    },
+
+    "gacha": {
+        "name": "📦 Hộp Quà Nhân Phẩm",
+        "price": 50,
+        "desc": "🎲 Mở ngay để nhận một phần thưởng ngẫu nhiên. Nhân phẩm quyết định tất cả!"
+    }
 }
+
+
+# ============================================================
+# 🎲 BẢNG PHẦN THƯỞNG GACHA
+# ============================================================
+#
+# TỶ LỆ KHÔNG HIỂN THỊ CHO THÀNH VIÊN
+#
+# 🌸 Lời chúc:              45%
+# 🍀 10-30 Cỏ:              30%
+# 🍀 31-60 Cỏ:              15%
+# 🍀 61-100 Cỏ:               6%
+# 🎫 Vé Miễn Phạt:            3%
+# ❄️ Thẻ Đóng Băng Streak:    1%
+#
+# Tổng = 100%
+# ============================================================
+
+
+def open_mystery_gacha():
+
+    roll = random.uniform(
+        0,
+        100
+    )
+
+    # ========================================================
+    # 🌸 45% - LỜI CHÚC
+    # ========================================================
+
+    if roll < 45:
+
+        return {
+            "type": "message",
+            "title": "🌸 NHÂN PHẨM HƠI ĐAU...",
+            "description": (
+                "Ong mở hộp ra...\n\n"
+                "📦✨ *Phụt!*\n\n"
+                "🌸 **Chúc Ong học tập thật tốt nhé!**\n"
+                "Nhưng hôm nay chưa có phần thưởng vật chất nào cả. 😭\n\n"
+                "💪 Đừng buồn, biết đâu hộp tiếp theo "
+                "lại là hàng cực phẩm!"
+            )
+        }
+
+
+    # ========================================================
+    # 🍀 30% - 10 ĐẾN 30 CỎ
+    # ========================================================
+
+    elif roll < 75:
+
+        clovers = random.randint(
+            10,
+            30
+        )
+
+        return {
+            "type": "clover",
+            "amount": clovers,
+            "title": "🍀 NHẶT ĐƯỢC CỎ 4 LÁ!",
+            "description": (
+                f"✨ Nhân phẩm hôm nay cũng khá ổn!\n\n"
+                f"🍀 **+{clovers} Cỏ 4 Lá**"
+            )
+        }
+
+
+    # ========================================================
+    # 🍀 15% - 31 ĐẾN 60 CỎ
+    # ========================================================
+
+    elif roll < 90:
+
+        clovers = random.randint(
+            31,
+            60
+        )
+
+        return {
+            "type": "clover",
+            "amount": clovers,
+            "title": "💚 NHÂN PHẨM KHÁ TỐT!",
+            "description": (
+                f"🎉 Hộp quà phát sáng!\n\n"
+                f"🍀 **+{clovers} Cỏ 4 Lá**\n\n"
+                f"🔥 Hôm nay Ong có vẻ được "
+                f"vũ trụ phù hộ rồi!"
+            )
+        }
+
+
+    # ========================================================
+    # 🍀 6% - 61 ĐẾN 100 CỎ
+    # ========================================================
+
+    elif roll < 96:
+
+        clovers = random.randint(
+            61,
+            100
+        )
+
+        return {
+            "type": "clover",
+            "amount": clovers,
+            "title": "💎 ĐẠI PHÁT TÀI!",
+            "description": (
+                f"🎲 **NHÂN PHẨM BÙNG NỔ!**\n\n"
+                f"🍀 **+{clovers} Cỏ 4 Lá**\n\n"
+                f"👑 Một trong những phần thưởng "
+                f"hiếm của Hộp Quà Nhân Phẩm!"
+            )
+        }
+
+
+    # ========================================================
+    # 🎫 3% - VÉ MIỄN PHẠT
+    # ========================================================
+
+    elif roll < 99:
+
+        return {
+            "type": "item",
+            "item_name": "🎫 Vé Miễn Phạt",
+            "title": "🎫 NHẬN ĐƯỢC VÉ MIỄN PHẠT!",
+            "description": (
+                "😳 **NHÂN PHẨM TỐT!**\n\n"
+                "Bạn đã nhận được:\n"
+                "🎫 **Vé Miễn Phạt**\n\n"
+                "📦 Vật phẩm đã được đưa thẳng "
+                "vào **🎒 Túi đồ** của bạn."
+            )
+        }
+
+
+    # ========================================================
+    # ❄️ 1% - THẺ ĐÓNG BĂNG STREAK
+    # ========================================================
+
+    else:
+
+        return {
+            "type": "item",
+            "item_name": "❄️ Thẻ Đóng Băng Streak",
+            "title": "❄️ NHÂN PHẨM CỰC PHẨM!!!",
+            "description": (
+                "🌟🌟🌟 **1% NHÂN PHẨM!** 🌟🌟🌟\n\n"
+                "😱 Ong vừa mở được:\n"
+                "❄️ **Thẻ Đóng Băng Streak**\n\n"
+                "📦 Vật phẩm đã được đưa thẳng "
+                "vào **🎒 Túi đồ** của bạn.\n\n"
+                "🔥 Đây là một trong những phần thưởng "
+                "hiếm nhất của Hộp Quà Nhân Phẩm!"
+            )
+        }
+
+
+# ============================================================
+# 🛒 LỆNH MUA HÀNG
+# ============================================================
+
+@bot.command()
+async def mua(ctx, code: str):
+
+    user_id = ctx.author.id
+
+    code = code.lower().strip()
+
+
+    # ========================================================
+    # ❌ KIỂM TRA MÃ SẢN PHẨM
+    # ========================================================
+
+    if code not in SHOP_ITEMS:
+
+        await ctx.send(
+            "⚠️ **Mã món hàng không tồn tại!**\n\n"
+            "🛒 Gõ `!shop` để xem danh sách "
+            "các món hàng hiện có."
+        )
+
+        return
+
+
+    item = SHOP_ITEMS[code]
+
+    price = item["price"]
+
+    current_clovers = get_clovers(
+        user_id
+    )
+
+
+    # ========================================================
+    # 💰 KIỂM TRA SỐ DƯ
+    # ========================================================
+
+    if current_clovers < price:
+
+        await ctx.send(
+            f"❌ {ctx.author.mention} **không đủ Cỏ 4 Lá!**\n\n"
+            f"🍀 Bạn đang có: **{current_clovers} Cỏ**\n"
+            f"💰 Cần: **{price} Cỏ**\n"
+            f"📉 Thiếu: **{price - current_clovers} Cỏ**"
+        )
+
+        return
+
+
+    # ========================================================
+    # 📦 MYSTERY GACHA
+    # ========================================================
+
+    if code == "gacha":
+
+        # ----------------------------------------------------
+        # Trừ tiền trước khi mở hộp
+        # ----------------------------------------------------
+
+        add_clovers(
+            user_id,
+            -price
+        )
+
+
+        # ----------------------------------------------------
+        # 🎲 RANDOM PHẦN THƯỞNG
+        # ----------------------------------------------------
+
+        reward = open_mystery_gacha()
+
+
+        # ====================================================
+        # 🌸 TRƯỜNG HỢP LỜI CHÚC
+        # ====================================================
+
+        if reward["type"] == "message":
+
+            embed = discord.Embed(
+                title=reward["title"],
+                description=(
+                    f"{ctx.author.mention}\n\n"
+                    f"{reward['description']}\n\n"
+                    f"💸 **Đã sử dụng:** "
+                    f"50 🍀"
+                ),
+                color=discord.Color.light_grey()
+            )
+
+
+        # ====================================================
+        # 🍀 TRƯỜNG HỢP TRÚNG CỎ
+        # ====================================================
+
+        elif reward["type"] == "clover":
+
+            add_clovers(
+                user_id,
+                reward["amount"]
+            )
+
+            new_balance = get_clovers(
+                user_id
+            )
+
+            embed = discord.Embed(
+                title=reward["title"],
+                description=(
+                    f"{ctx.author.mention}\n\n"
+                    f"{reward['description']}\n\n"
+                    f"💸 **Giá hộp:** -50 🍀\n"
+                    f"💰 **Số dư hiện tại:** "
+                    f"**{new_balance} 🍀**"
+                ),
+                color=discord.Color.green()
+            )
+
+
+        # ====================================================
+        # 🎫 / ❄️ TRƯỜNG HỢP TRÚNG VẬT PHẨM
+        # ====================================================
+
+        elif reward["type"] == "item":
+
+            add_item_to_inventory(
+                user_id,
+                reward["item_name"],
+                1
+            )
+
+            embed = discord.Embed(
+                title=reward["title"],
+                description=(
+                    f"{ctx.author.mention}\n\n"
+                    f"{reward['description']}\n\n"
+                    f"💸 **Giá hộp:** -50 🍀\n"
+                    f"🎒 Kiểm tra vật phẩm bằng "
+                    f"`!tuido`"
+                ),
+                color=discord.Color.gold()
+            )
+
+
+        # ====================================================
+        # 🎲 HIỂN THỊ KẾT QUẢ
+        # ====================================================
+
+        embed.set_footer(
+            text=(
+                "📦 Mystery Gacha Box • "
+                "Nhân phẩm quyết định tất cả 🎲"
+            )
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+        return
+
+
+    # ========================================================
+    # 🛍️ MUA VẬT PHẨM THÔNG THƯỜNG
+    # ========================================================
+
+    add_clovers(
+        user_id,
+        -price
+    )
+
+    add_item_to_inventory(
+        user_id,
+        item["name"],
+        1
+    )
+
+    await ctx.send(
+        f"🎉 Chúc mừng {ctx.author.mention} "
+        f"đã mua thành công **{item['name']}**!\n\n"
+        f"💸 Đã trừ: **-{price} 🍀**\n"
+        f"🎒 Vật phẩm đã được đưa vào túi đồ.\n\n"
+        f"📦 Kiểm tra bằng lệnh `!tuido` nhé! "
+        f"(๑•̀ㅂ•́)و✧"
+    )
+
 
 # --- DATABASE TỔNG HỢP ---
 def init_db():
@@ -1142,51 +1508,6 @@ async def tracnghiem(ctx):
     except asyncio.TimeoutError:
         await ctx.send(f"⏰ Hết giờ mất rồi {ctx.author.mention} ơi! Lần sau nhanh tay hơn nhé! (｡•́︿•̀｡)")
 
-# --- 🛒 CỬA HÀNG (SHOP) & ĐỔI QUÀ ---
-@bot.command()
-async def shop(ctx):
-    embed = discord.Embed(title="🛒 CỬA HÀNG CỎ 4 LÁ 🍀", description="Dùng Cỏ 4 Lá kiếm được để đổi các phần quà đặc biệt nhé! Gõ `!mua <mã_item>` để mua.", color=discord.Color.gold())
-    for code, item in SHOP_ITEMS.items():
-        embed.add_field(name=f"[{code}] {item['name']} - 🍀 {item['price']} Cỏ", value=item['desc'], inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def mua(ctx, code: str):
-    user_id = ctx.author.id
-    if code not in SHOP_ITEMS:
-        await ctx.send("⚠️ Mã món hàng không tồn tại! Gõ `!shop` để xem danh sách.")
-        return
-    
-    item = SHOP_ITEMS[code]
-    price = item['price']
-    current_clovers = get_clovers(user_id)
-
-    if current_clovers < price:
-        await ctx.send(f"❌ Bạn không đủ Cỏ 4 Lá! Bạn đang có {current_clovers} 🍀 nhưng món này cần tới {price} 🍀.")
-        return
-
-    add_clovers(user_id, -price)
-    add_item_to_inventory(user_id, item['name'], 1)
-    await ctx.send(f"🎉 Chúc mừng {ctx.author.mention} đã mua thành công **{item['name']}**! Đã trừ -{price} 🍀. Kiểm tra kho đồ bằng lệnh `!tuido` nhé! (๑•̀ㅂ•́)و✧")
-
-@bot.command(name="tuido")
-async def tuido(ctx):
-    user_id = ctx.author.id
-    conn = sqlite3.connect("study_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT item_name, amount FROM user_inventory WHERE user_id = ?", (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-
-    embed = discord.Embed(title=f"🎒 TÚI ĐỒ CỦA {ctx.author.display_name}", color=discord.Color.blurple())
-    if rows:
-        desc = ""
-        for name, amt in rows:
-            desc += f"• **{name}**: x{amt}\n"
-        embed.description = desc
-    else:
-        embed.description = "Túi đồ của bạn đang trống! Hãy chăm chỉ học tập kiếm Cỏ để mua sắm nhé! 🌸"
-    await ctx.send(embed=embed)
 
 # ============================================================
 # ⏰ HỆ THỐNG NHẮC NHỞ CÁ NHÂN
