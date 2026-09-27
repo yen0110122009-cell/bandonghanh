@@ -176,111 +176,840 @@ class SubjectSelectView(View):
         self.user_id = user_id
         self.add_item(SubjectSelect(user_id))
 
-# --- ⏱️ THEO DÕI CAMERA, VOICE, CHÀO MỪNG & TẠM BIỆT ---
-@bot.event
-async def on_voice_state_update(member, before, after):
-    # 1. Tự động tạo phòng học riêng
-    if after.channel and "Tạo Phòng Học" in after.channel.name:
-        guild = member.guild
-        category = after.channel.category
-        new_channel = await guild.create_voice_channel(name=f"🌸 Phòng Học Của {member.display_name}", category=category)
-        await member.move_to(new_channel)
+```python
+# ============================================================
+# 🌸 HỆ THỐNG VOICE HỌC TẬP
+# - Không tự tạo phòng
+# - Không tự xóa phòng
+# - Vào phòng -> chào trong Voice Chat
+# - Bật camera -> bắt đầu học
+# - Tắt camera -> kết thúc học ngay
+# - Rời phòng khi đang bật camera -> kết thúc học
+# - 9 phút = 1 Cỏ 4 Lá
+# - Tính Streak
+# - Bật/tắt camera 3 lần trong 5 phút -> cảnh báo
+# - Cảnh báo -> tag BQL + Chủ Server tại kênh kỷ luật
+# - Không tự động xử phạt
+# ============================================================
 
-    # 2. Thành viên VÀO phòng voice (Gửi câu chào mừng ngọt ngào)
-    if before.channel is None and after.channel is not None:
-        welcome_chan = discord.utils.get(member.guild.text_channels, name="🌸·chung") or after.channel
+
+# ============================================================
+# 📦 BIẾN HỆ THỐNG
+# ============================================================
+
+user_cam_start = {}
+user_subject_study = {}
+camera_toggle_history = {}
+
+# 3 lần bật/tắt trong 5 phút -> cảnh báo
+TOGGLE_LIMIT = 3
+TOGGLE_WINDOW = 300
+
+
+# ============================================================
+# 📢 GỬI CẢNH BÁO CHO BQL + CHỦ SERVER
+# ============================================================
+
+async def alert_camera_violation(
+    member,
+    voice_channel,
+    toggle_count
+):
+
+    guild = member.guild
+
+    # Role Quản Trị Viên
+    role_bql = discord.utils.get(
+        guild.roles,
+        name="🛡️ Quản Trị Viên (BQL)"
+    )
+
+    # Role Chủ Server
+    role_owner = discord.utils.get(
+        guild.roles,
+        name="👑 Chủ Server"
+    )
+
+    # Kênh kỷ luật
+    ky_luat_chan = discord.utils.get(
+        guild.text_channels,
+        name="⚠️·kênh-kỷ-luật"
+    )
+
+    if not ky_luat_chan:
+        print(
+            "⚠️ Không tìm thấy kênh "
+            "⚠️·kênh-kỷ-luật"
+        )
+        return
+
+    # Tạo danh sách role cần tag
+    mentions = []
+
+    if role_bql:
+        mentions.append(
+            role_bql.mention
+        )
+
+    if role_owner:
+        mentions.append(
+            role_owner.mention
+        )
+
+    role_mentions = " ".join(
+        mentions
+    )
+
+    channel_name = (
+        voice_channel.name
+        if voice_channel
+        else "Không xác định"
+    )
+
+    # Embed cảnh báo
+    embed = discord.Embed(
+        title="🚨 CẢNH BÁO HÀNH VI CAMERA BẤT THƯỜNG",
+        description=(
+            f"⚠️ Hệ thống phát hiện thành viên "
+            f"có hành vi **bật/tắt camera liên tục**.\n\n"
+
+            f"👤 **Thành viên:** "
+            f"{member.mention}\n"
+
+            f"🎧 **Phòng học:** "
+            f"`{channel_name}`\n"
+
+            f"🔄 **Số lần ghi nhận:** "
+            f"`{toggle_count}` lần\n"
+
+            f"⏱️ **Khoảng thời gian:** "
+            f"`5 phút`\n\n"
+
+            f"📌 **Trạng thái:** "
+            f"Chưa tự động xử phạt.\n\n"
+
+            f"🛡️ BQL vui lòng kiểm tra và quyết định "
+            f"hình thức xử lý nếu cần."
+        ),
+        color=discord.Color.red()
+    )
+
+    embed.set_footer(
+        text=(
+            "Hệ thống giám sát học tập "
+            "• Cảnh báo tự động"
+        )
+    )
+
+    await ky_luat_chan.send(
+        content=role_mentions,
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions(
+            roles=True,
+            users=True
+        )
+    )
+
+
+# ============================================================
+# 🔄 GHI NHẬN BẬT/TẮT CAMERA
+# ============================================================
+
+def record_camera_toggle(member_id):
+
+    now = time.time()
+
+    if member_id not in camera_toggle_history:
+        camera_toggle_history[member_id] = []
+
+    # Chỉ giữ những lần xảy ra trong 5 phút
+    camera_toggle_history[member_id] = [
+        timestamp
+        for timestamp in camera_toggle_history[member_id]
+        if now - timestamp <= TOGGLE_WINDOW
+    ]
+
+    camera_toggle_history[member_id].append(
+        now
+    )
+
+    return len(
+        camera_toggle_history[member_id]
+    )
+
+
+# ============================================================
+# 🎧 GỬI TIN NHẮN VÀO CHAT CỦA VOICE CHANNEL
+# ============================================================
+
+async def send_voice_chat(
+    channel,
+    content=None,
+    embed=None,
+    view=None,
+    delete_after=None
+):
+
+    if channel is None:
+        return None
+
+    try:
+
+        # Voice Channel hỗ trợ send()
+        if hasattr(channel, "send"):
+
+            return await channel.send(
+                content=content,
+                embed=embed,
+                view=view,
+                delete_after=delete_after
+            )
+
+    except Exception as e:
+
+        print(
+            f"[VOICE CHAT ERROR] "
+            f"{channel.name}: {e}"
+        )
+
+    return None
+
+
+# ============================================================
+# 🎧 THEO DÕI VOICE STATE
+# ============================================================
+
+@bot.event
+async def on_voice_state_update(
+    member,
+    before,
+    after
+):
+
+    # ========================================================
+    # 1️⃣ THÀNH VIÊN VÀO VOICE
+    # ========================================================
+
+    if (
+        before.channel is None
+        and after.channel is not None
+    ):
+
+        voice_channel = after.channel
+
         embed_welcome = discord.Embed(
-            title="✨ CHÀO MỪNG BẠN ĐÃ ĐẾN VỚI GÓC HỌC TẬP! ✨",
-            description=f"Chào mừng {member.mention} đã vào phòng voice **{after.channel.name}**! 🌸🐝\n\n"
-                        f"*Chúc Ong có một buổi học tập thật năng suất, tập trung và đạt kết quả cao nha!* ( •̀ ω •́ )✧\n"
-                        f"💡 *Gợi ý:* Hãy bật camera để tích lũy thời gian học, đổi Cỏ 4 Lá 🍀 và duy trì chuỗi học tập nhé!",
+            title=(
+                "✨ CHÀO MỪNG BẠN ĐÃ ĐẾN "
+                "VỚI GÓC HỌC TẬP! ✨"
+            ),
+
+            description=(
+                f"Chào mừng {member.mention} "
+                f"đã vào phòng voice "
+                f"**{voice_channel.name}**! 🌸🐝\n\n"
+
+                f"*Chúc Ong có một buổi học tập "
+                f"thật năng suất, tập trung "
+                f"và đạt kết quả cao nha!* "
+                f"( •̀ ω •́ )✧\n\n"
+
+                f"💡 *Gợi ý:* Hãy bật camera "
+                f"để tích lũy thời gian học, "
+                f"đổi Cỏ 4 Lá 🍀 và duy trì "
+                f"chuỗi học tập nhé!"
+            ),
+
             color=discord.Color.gold()
         )
-        try:
-            await welcome_chan.send(content=f"{member.mention}", embed=embed_welcome, delete_after=60)
-        except Exception:
-            pass
 
-    # 3. Khi bật camera học tập
-    if not before.self_video and after.self_video and after.channel:
-        user_cam_start[member.id] = time.time()
-        user_subject_study[member.id] = {"subject": "Tự do", "start_time": time.time()}
-        
-        embed = discord.Embed(
-            title="🎉 BẮT ĐẦU TÍCH LŨY GIỜ HỌC! 🎉",
-            description=f"{member.mention} đã bật camera học cùng mọi người rồi nè! 🌸✨\n\n👉 **Hãy chọn môn học bên dưới bảng tương tác nhé:**",
-            color=discord.Color.green()
+        await send_voice_chat(
+            voice_channel,
+            content=member.mention,
+            embed=embed_welcome,
+            delete_after=60
         )
-        view = SubjectSelectView(member.id)
-        try:
-            await after.channel.send(content=f"{member.mention}", embed=embed, view=view, delete_after=120)
-        except Exception:
-            pass
 
-    # 4. Khi tắt camera hoặc RỜI phòng voice (Tổng kết, quy đổi 1:9, tính Streak & Tạm biệt)
-    elif (before.self_video and not after.self_video) or (before.channel and not after.channel and member.id in user_cam_start):
-        if member.id in user_cam_start:
-            start_t = user_cam_start.pop(member.id)
-            duration = int(time.time() - start_t)
-            duration_minutes = duration // 60
 
-            hours = duration // 3600
-            minutes = (duration % 3600) // 60
-            seconds = duration % 60
+    # ========================================================
+    # 2️⃣ BẬT CAMERA
+    # ========================================================
 
-            subject_info = user_subject_study.get(member.id, {"subject": "Tự do"})
-            subject_name = subject_info["subject"]
-            
-            add_study_time(member.id, subject_name, duration)
-            
-            # 🍀 QUY ĐỔI CỎ 4 LÁ THEO MỐC 1:9 (Cứ 9 phút = 1 Cỏ 4 Lá)
-            earned_clovers = duration_minutes // 9
-            if earned_clovers > 0:
-                add_clovers(member.id, earned_clovers)
+    if (
+        not before.self_video
+        and after.self_video
+        and after.channel
+    ):
 
-            # 🔥 TÍNH TOÁN & CẬP NHẬT CHUỖI HỌC (STREAK)
-            today_str = datetime.now().strftime("%d/%m/%Y")
-            yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
-            
-            conn = sqlite3.connect("study_data.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT current_streak, last_study_date FROM user_streak WHERE user_id = ?", (member.id,))
-            streak_row = cursor.fetchone()
-            
-            current_streak = 1
-            if streak_row:
-                last_date = streak_row[1]
-                if last_date == today_str:
-                    current_streak = streak_row[0]
-                elif last_date == yesterday_str:
-                    current_streak = streak_row[0] + 1
-                else:
-                    current_streak = 1
-                cursor.execute("UPDATE user_streak SET current_streak = ?, last_study_date = ? WHERE user_id = ?", (current_streak, today_str, member.id))
-            else:
-                cursor.execute("INSERT INTO user_streak (user_id, current_streak, last_study_date) VALUES (?, ?, ?)", (member.id, 1, today_str))
-            conn.commit()
-            conn.close()
+        # Không tạo phiên thứ hai
+        if member.id not in user_cam_start:
 
-            chan = before.channel or after.channel
-            if chan:
-                time_str = f"{hours} giờ " if hours > 0 else ""
-                time_str += f"{minutes} phút " if minutes > 0 or hours > 0 else ""
-                time_str += f"{seconds} giây"
+            now = time.time()
 
-                msg = (
-                    f"👋 Tạm biệt {member.mention}! Cảm ơn bạn vì đã nỗ lực hết mình hôm nay. "
-                    f"**Chúc bạn nghỉ ngơi thật thoải mái và nạp lại năng lượng nhé!** 🌸✨ ( ˘ ³˘)♥\n\n"
-                    f"📚 **Môn học đã học:** {subject_name}\n"
-                    f"⏱️ **Thời gian tập trung:** **{time_str}**\n"
-                    f"🔥 **Chuỗi học tập hiện tại:** **{current_streak} ngày liên tiếp**!"
+            user_cam_start[
+                member.id
+            ] = now
+
+            user_subject_study[
+                member.id
+            ] = {
+                "subject": "Tự do",
+                "start_time": now,
+                "channel_id": after.channel.id
+            }
+
+            # Ghi nhận bật camera
+            toggle_count = record_camera_toggle(
+                member.id
+            )
+
+            embed_start = discord.Embed(
+                title=(
+                    "🎉 BẮT ĐẦU TÍCH LŨY "
+                    "GIỜ HỌC! 🎉"
+                ),
+
+                description=(
+                    f"{member.mention} đã bật "
+                    f"camera học cùng mọi người "
+                    f"rồi nè! 🌸✨\n\n"
+
+                    f"👉 **Hãy chọn môn học "
+                    f"bên dưới bảng tương tác nhé!**"
+                ),
+
+                color=discord.Color.green()
+            )
+
+            view = SubjectSelectView(
+                member.id
+            )
+
+            await send_voice_chat(
+                after.channel,
+                content=member.mention,
+                embed=embed_start,
+                view=view,
+                delete_after=120
+            )
+
+            # ------------------------------------------------
+            # 🚨 CẢNH BÁO NẾU BẬT/TẮT QUÁ NHIỀU
+            # ------------------------------------------------
+
+            if toggle_count >= TOGGLE_LIMIT:
+
+                await alert_camera_violation(
+                    member,
+                    after.channel,
+                    toggle_count
                 )
-                if earned_clovers > 0:
-                    msg += f"\n🍀 **Quy đổi (Mốc 1:9):** Nhận được **+{earned_clovers} Cỏ 4 Lá**!"
-                await chan.send(msg)
 
-    if before.channel and len(before.channel.members) == 0 and before.channel.name.startswith("🌸 Phòng Học Của"):
-        await before.channel.delete()
+                warning_embed = discord.Embed(
+                    title="⚠️ CẢNH BÁO CAMERA",
+
+                    description=(
+                        f"{member.mention}, hệ thống "
+                        f"ghi nhận bạn đã bật/tắt camera "
+                        f"**{toggle_count} lần trong 5 phút "
+                        f"gần đây**.\n\n"
+
+                        f"📌 Vui lòng hạn chế bật/tắt "
+                        f"camera liên tục để thời gian "
+                        f"học được ghi nhận chính xác.\n\n"
+
+                        f"🛡️ BQL và Chủ Server "
+                        f"đã được thông báo.\n\n"
+
+                        f"📌 Bot **không tự động trừ Cỏ "
+                        f"hoặc xử phạt**."
+                    ),
+
+                    color=discord.Color.orange()
+                )
+
+                await send_voice_chat(
+                    after.channel,
+                    embed=warning_embed
+                )
+
+
+    # ========================================================
+    # 3️⃣ TẮT CAMERA
+    # → KẾT THÚC PHIÊN HỌC NGAY
+    # ========================================================
+
+    if (
+        before.self_video
+        and not after.self_video
+        and member.id in user_cam_start
+    ):
+
+        start_t = user_cam_start.pop(
+            member.id
+        )
+
+        duration = int(
+            time.time() - start_t
+        )
+
+        duration_minutes = (
+            duration // 60
+        )
+
+        hours = duration // 3600
+
+        minutes = (
+            duration % 3600
+        ) // 60
+
+        seconds = duration % 60
+
+        subject_info = user_subject_study.pop(
+            member.id,
+            {"subject": "Tự do"}
+        )
+
+        subject_name = subject_info.get(
+            "subject",
+            "Tự do"
+        )
+
+        study_channel = (
+            before.channel
+            or after.channel
+        )
+
+
+        # ====================================================
+        # 📚 LƯU GIỜ HỌC
+        # ====================================================
+
+        add_study_time(
+            member.id,
+            subject_name,
+            duration
+        )
+
+
+        # ====================================================
+        # 🍀 QUY ĐỔI CỎ
+        # 9 PHÚT = 1 CỎ
+        # ====================================================
+
+        earned_clovers = (
+            duration_minutes // 9
+        )
+
+        if earned_clovers > 0:
+
+            add_clovers(
+                member.id,
+                earned_clovers
+            )
+
+
+        # ====================================================
+        # 🔥 TÍNH STREAK
+        # ====================================================
+
+        today_str = datetime.now().strftime(
+            "%d/%m/%Y"
+        )
+
+        yesterday_str = (
+            datetime.now()
+            - timedelta(days=1)
+        ).strftime(
+            "%d/%m/%Y"
+        )
+
+        conn = sqlite3.connect(
+            "study_data.db"
+        )
+
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT current_streak, last_study_date
+            FROM user_streak
+            WHERE user_id = ?
+            """,
+            (member.id,)
+        )
+
+        streak_row = cursor.fetchone()
+
+        current_streak = 1
+
+        if streak_row:
+
+            last_date = streak_row[1]
+
+            if last_date == today_str:
+
+                current_streak = streak_row[0]
+
+            elif last_date == yesterday_str:
+
+                current_streak = (
+                    streak_row[0] + 1
+                )
+
+            else:
+
+                current_streak = 1
+
+            cursor.execute(
+                """
+                UPDATE user_streak
+                SET current_streak = ?,
+                    last_study_date = ?
+                WHERE user_id = ?
+                """,
+                (
+                    current_streak,
+                    today_str,
+                    member.id
+                )
+            )
+
+        else:
+
+            cursor.execute(
+                """
+                INSERT INTO user_streak
+                (
+                    user_id,
+                    current_streak,
+                    last_study_date
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    member.id,
+                    1,
+                    today_str
+                )
+            )
+
+        conn.commit()
+        conn.close()
+
+
+        # ====================================================
+        # ⏱️ HIỂN THỊ THỜI GIAN
+        # ====================================================
+
+        time_str = ""
+
+        if hours > 0:
+
+            time_str += (
+                f"{hours} giờ "
+            )
+
+        if minutes > 0 or hours > 0:
+
+            time_str += (
+                f"{minutes} phút "
+            )
+
+        time_str += (
+            f"{seconds} giây"
+        )
+
+
+        # ====================================================
+        # 👋 TẠM BIỆT
+        # ====================================================
+
+        msg = (
+            f"👋 Tạm biệt {member.mention}! "
+            f"Cảm ơn bạn vì đã nỗ lực hết mình "
+            f"hôm nay. **Chúc bạn nghỉ ngơi thật "
+            f"thoải mái và nạp lại năng lượng nhé!** "
+            f"🌸✨ ( ˘ ³˘)♥\n\n"
+
+            f"📚 **Môn học đã học:** "
+            f"{subject_name}\n"
+
+            f"⏱️ **Thời gian tập trung:** "
+            f"**{time_str}**\n"
+
+            f"🔥 **Chuỗi học tập hiện tại:** "
+            f"**{current_streak} ngày liên tiếp**!"
+        )
+
+        if earned_clovers > 0:
+
+            msg += (
+                f"\n🍀 **Quy đổi (Mốc 1:9):** "
+                f"Nhận được **+{earned_clovers} "
+                f"Cỏ 4 Lá**!"
+            )
+
+        if study_channel:
+
+            await send_voice_chat(
+                study_channel,
+                content=msg
+            )
+
+
+        # ====================================================
+        # 🚨 KIỂM TRA BẬT/TẮT CAMERA LIÊN TỤC
+        # ====================================================
+
+        toggle_count = record_camera_toggle(
+            member.id
+        )
+
+        if toggle_count >= TOGGLE_LIMIT:
+
+            await alert_camera_violation(
+                member,
+                study_channel,
+                toggle_count
+            )
+
+            warning_embed = discord.Embed(
+                title="⚠️ CẢNH BÁO CAMERA",
+
+                description=(
+                    f"{member.mention}, hệ thống ghi nhận "
+                    f"**{toggle_count} lần bật/tắt camera "
+                    f"trong 5 phút**.\n\n"
+
+                    f"🛡️ BQL và Chủ Server đã được "
+                    f"thông báo tại kênh kỷ luật.\n\n"
+
+                    f"📌 Bot **không tự động xử phạt**. "
+                    f"BQL sẽ xem xét nếu cần."
+                ),
+
+                color=discord.Color.orange()
+            )
+
+            await send_voice_chat(
+                study_channel,
+                embed=warning_embed
+            )
+
+
+    # ========================================================
+    # 4️⃣ RỜI VOICE KHI CAMERA VẪN ĐANG BẬT
+    # ========================================================
+
+    if (
+        before.channel
+        and after.channel is None
+        and member.id in user_cam_start
+    ):
+
+        start_t = user_cam_start.pop(
+            member.id
+        )
+
+        duration = int(
+            time.time() - start_t
+        )
+
+        duration_minutes = (
+            duration // 60
+        )
+
+        hours = duration // 3600
+
+        minutes = (
+            duration % 3600
+        ) // 60
+
+        seconds = duration % 60
+
+        subject_info = user_subject_study.pop(
+            member.id,
+            {"subject": "Tự do"}
+        )
+
+        subject_name = subject_info.get(
+            "subject",
+            "Tự do"
+        )
+
+        study_channel = before.channel
+
+
+        # ====================================================
+        # 📚 LƯU GIỜ HỌC
+        # ====================================================
+
+        add_study_time(
+            member.id,
+            subject_name,
+            duration
+        )
+
+
+        # ====================================================
+        # 🍀 QUY ĐỔI CỎ
+        # ====================================================
+
+        earned_clovers = (
+            duration_minutes // 9
+        )
+
+        if earned_clovers > 0:
+
+            add_clovers(
+                member.id,
+                earned_clovers
+            )
+
+
+        # ====================================================
+        # 🔥 TÍNH STREAK
+        # ====================================================
+
+        today_str = datetime.now().strftime(
+            "%d/%m/%Y"
+        )
+
+        yesterday_str = (
+            datetime.now()
+            - timedelta(days=1)
+        ).strftime(
+            "%d/%m/%Y"
+        )
+
+        conn = sqlite3.connect(
+            "study_data.db"
+        )
+
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT current_streak, last_study_date
+            FROM user_streak
+            WHERE user_id = ?
+            """,
+            (member.id,)
+        )
+
+        streak_row = cursor.fetchone()
+
+        current_streak = 1
+
+        if streak_row:
+
+            last_date = streak_row[1]
+
+            if last_date == today_str:
+
+                current_streak = streak_row[0]
+
+            elif last_date == yesterday_str:
+
+                current_streak = (
+                    streak_row[0] + 1
+                )
+
+            else:
+
+                current_streak = 1
+
+            cursor.execute(
+                """
+                UPDATE user_streak
+                SET current_streak = ?,
+                    last_study_date = ?
+                WHERE user_id = ?
+                """,
+                (
+                    current_streak,
+                    today_str,
+                    member.id
+                )
+            )
+
+        else:
+
+            cursor.execute(
+                """
+                INSERT INTO user_streak
+                (
+                    user_id,
+                    current_streak,
+                    last_study_date
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    member.id,
+                    1,
+                    today_str
+                )
+            )
+
+        conn.commit()
+        conn.close()
+
+
+        # ====================================================
+        # ⏱️ FORMAT THỜI GIAN
+        # ====================================================
+
+        time_str = ""
+
+        if hours > 0:
+
+            time_str += (
+                f"{hours} giờ "
+            )
+
+        if minutes > 0 or hours > 0:
+
+            time_str += (
+                f"{minutes} phút "
+            )
+
+        time_str += (
+            f"{seconds} giây"
+        )
+
+
+        # ====================================================
+        # 👋 TẠM BIỆT KHI RỜI PHÒNG
+        # ====================================================
+
+        msg = (
+            f"👋 Tạm biệt {member.mention}! "
+            f"Cảm ơn bạn vì đã nỗ lực hết mình "
+            f"hôm nay. 🌸✨\n\n"
+
+            f"📚 **Môn học đã học:** "
+            f"{subject_name}\n"
+
+            f"⏱️ **Thời gian tập trung:** "
+            f"**{time_str}**\n"
+
+            f"🔥 **Chuỗi học tập hiện tại:** "
+            f"**{current_streak} ngày liên tiếp**!"
+        )
+
+        if earned_clovers > 0:
+
+            msg += (
+                f"\n🍀 **Quy đổi (Mốc 1:9):** "
+                f"Nhận được **+{earned_clovers} "
+                f"Cỏ 4 Lá**!"
+            )
+
+        await send_voice_chat(
+            study_channel,
+            content=msg
+        )
 
 # --- 📊 HỆ THỐNG BÁO CÁO HỌC TẬP LINH HOẠT ---
 @bot.command()
@@ -488,14 +1217,8 @@ async def setup_server(ctx):
             ("🌸·chung", "text"),
             ("📚·chia-sẻ-tài-liệu", "text"),
             ("🧠·trắc-nghiệm-mỗi-ngày", "text"),
-            ("🌸·tạo-phòng-học", "voice"),
             ("🎧·phòng-tập-trung-1", "voice"),
             ("🎧·phòng-tập-trung-2", "voice")
-        ],
-        "☕ GÓC THƯ GIÃN": [
-            ("💬·trò-chuyện-chung", "text"),
-            ("📸·khoảnh-khắc-mỗi-ngày", "text"),
-            ("🎵·âm-nhạc-thư-giãn", "voice")
         ],
         "🛡️ HỆ THỐNG KỶ LUẬT": [
             ("⚠️·kênh-kỷ-luật", "text")
