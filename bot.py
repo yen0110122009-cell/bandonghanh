@@ -46,6 +46,7 @@ DEFAULT_SUBJECTS = [
 SHOP_ITEMS = {
     "1": {"name": "❄️ Thẻ Đóng Băng Streak", "price": 100, "desc": "Bảo toàn chuỗi học tập liên tục của bạn khi nghỉ 1 ngày"}
 }
+
 # --- DATABASE TỔNG HỢP ---
 def init_db():
     conn = sqlite3.connect("study_data.db")
@@ -174,6 +175,7 @@ class SubjectSelectView(View):
         super().__init__(timeout=timeout)
         self.user_id = user_id
         self.add_item(SubjectSelect(user_id))
+
 # --- ⏱️ THEO DÕI CAMERA, VOICE, CHÀO MỪNG & TẠM BIỆT ---
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -279,18 +281,10 @@ async def on_voice_state_update(member, before, after):
 
     if before.channel and len(before.channel.members) == 0 and before.channel.name.startswith("🌸 Phòng Học Của"):
         await before.channel.delete()
+
 # --- 📊 HỆ THỐNG BÁO CÁO HỌC TẬP LINH HOẠT ---
 @bot.command()
 async def baocao(ctx, mode: str = "ngay", *, target: str = None):
-    """
-    Cú pháp:
-    !baocao ngay -> Xem báo cáo tổng hợp hôm nay
-    !baocao tuan -> Xem báo cáo tổng hợp tuần này
-    !baocao thang -> Xem báo cáo tổng hợp tháng này
-    !baocao nam -> Xem báo cáo tổng hợp năm nay
-    !baocao mon <Tên môn> -> Xem tổng thời gian của môn đó
-    !baocao ngay_mon <Tên môn> -> Xem chi tiết môn theo ngày
-    """
     user_id = ctx.author.id
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
@@ -313,7 +307,6 @@ async def baocao(ctx, mode: str = "ngay", *, target: str = None):
         embed.description = desc
 
     elif mode == "tuan":
-        # Lấy dữ liệu 7 ngày gần nhất
         cursor.execute("SELECT date, subject, duration FROM daily_study WHERE user_id = ? ORDER BY rowid DESC LIMIT 30", (user_id,))
         rows = cursor.fetchall()
         total_sec = sum(r[2] for r in rows)
@@ -360,7 +353,6 @@ async def baocao(ctx, mode: str = "ngay", *, target: str = None):
         embed.description = f"📚 **Môn học:** {target}\n⏱️ **Tổng tích lũy từ trước đến nay:** {h}h {m}m {s}s"
 
     else:
-        # Mặc định tổng quan toàn bộ
         cursor.execute("SELECT total_time FROM user_study WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         total_sec = row[0] if row else 0
@@ -388,7 +380,6 @@ async def tracnghiem(ctx):
         conn.close()
         return
 
-    # Ngân hàng câu hỏi trắc nghiệm mẫu
     questions = [
         {"q": "Đâu là một môn khoa học tự nhiên?", "options": ["A. Vật Lý", "B. Ngữ Văn", "C. Lịch Sử", "D. Địa Lý"], "answer": "A"},
         {"q": "Thủ đô của Việt Nam là gì?", "options": ["A. TP. Hồ Chí Minh", "B. Hà Nội", "C. Đà Nẵng", "D. Hải Phòng"], "answer": "B"},
@@ -475,7 +466,6 @@ async def setup_server(ctx):
     if not is_bql(ctx): return
     guild = ctx.guild
     
-    # 1. TẠO CÁC ROLE QUAN TRỌNG
     roles_to_create = [
         ("👑 Chủ Server", discord.Color.red()),
         ("🛡️ Quản Trị Viên (BQL)", discord.Color.orange()),
@@ -488,7 +478,6 @@ async def setup_server(ctx):
         if not discord.utils.get(guild.roles, name=r_name):
             await guild.create_role(name=r_name, color=r_color)
 
-    # 2. TẠO CÁC DANH MỤC VÀ HỆ THỐNG KÊNH CHUYÊN NGHIỆP
     categories_structure = {
         "📌 THÔNG TIN CHUNG": [
             ("📢·thông-báo", "text"),
@@ -527,12 +516,12 @@ async def setup_server(ctx):
                     await guild.create_voice_channel(c_name, category=category)
                 else:
                     chan = await guild.create_text_channel(c_name, category=category)
-                    # Nếu là kênh kỷ luật thì khóa với mọi người, chỉ cho role kỷ luật và admin thấy
                     if c_name == "⚠️·kênh-kỷ-luật" and role_ky_luat:
                         await chan.set_permissions(role_ky_luat, read_messages=True, send_messages=True)
                         await chan.set_permissions(guild.default_role, read_messages=False)
 
-    await ctx.send("✅ Đã thiết lập hoàn tất toàn bộ **Role quan trọng** và **Hệ thống kênh chuyên nghiệp** cho Server! 🚀✨ ( •̀ ω •́ )✧")
+    await ctx.send("✅ Đã thiết lập hoàn tất toàn bộ **Role quan trọng** và **Hệ thống kênh chuyên nghiệp** için Server! 🚀✨ ( •̀ ω •́ )✧")
+
 @bot.command()
 async def xem_phat(ctx):
     conn = sqlite3.connect("study_data.db")
@@ -610,6 +599,8 @@ async def duyet(ctx, member: discord.Member, *, loi_nhan: str = "Đã hoàn thà
         await ctx.send(f"⚠️ Thành viên này hiện không bị dính kỷ luật nha Ong!")
 
 # --- RUN BOT ---
-TOKEN = os.environ.get("DISCORD_TOKEN")
-if TOKEN:
-    bot.run(TOKEN)
+if __name__ == "__main__":
+    keep_alive()
+    TOKEN = os.environ.get("DISCORD_TOKEN")
+    if TOKEN:
+        bot.run(TOKEN)
