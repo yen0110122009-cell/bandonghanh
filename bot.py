@@ -178,21 +178,40 @@ class SubjectSelectView(View):
         self.add_item(SubjectSelect(user_id))
 
 # --- ⏱️ THEO DÕI CAMERA & TÍNH THỜI GIAN ---
+# --- ⏱️ THEO DÕI CAMERA, VOICE, CHÀO MỪNG & TẠM BIỆT ---
 @bot.event
 async def on_voice_state_update(member, before, after):
+    # 1. Tự động tạo phòng học riêng
     if after.channel and "Tạo Phòng Học" in after.channel.name:
         guild = member.guild
         category = after.channel.category
         new_channel = await guild.create_voice_channel(name=f"🌸 Phòng Học Của {member.display_name}", category=category)
         await member.move_to(new_channel)
 
+    # 2. Thành viên VÀO phòng voice (Gửi câu chào mừng ngọt ngào)
+    if before.channel is None and after.channel is not None:
+        # Tìm kênh chat chung hoặc kênh thông báo để chào mừng (nếu có)
+        welcome_chan = discord.utils.get(member.guild.text_channels, name="🌸·chung") or after.channel
+        embed_welcome = discord.Embed(
+            title="✨ CHÀO MỪNG BẠN ĐÃ ĐẾN VỚI GÓC HỌC TẬP! ✨",
+            description=f"Chào mừng {member.mention} đã vào phòng voice **{after.channel.name}**! 🌸🐝\n\n"
+                        f"*Chúc Ong có một buổi học tập thật năng suất, tập trung và đạt kết quả cao nha!* ( •̀ ω •́ )✧\n"
+                        f"💡 *Gợi ý:* Hãy bật camera để tích lũy thời gian học và nhận Cỏ 4 Lá 🍀 nhé!",
+            color=discord.Color.gold()
+        )
+        try:
+            await welcome_chan.send(content=f"{member.mention}", embed=embed_welcome, delete_after=60)
+        except Exception:
+            pass
+
+    # 3. Khi bật camera học tập
     if not before.self_video and after.self_video and after.channel:
         user_cam_start[member.id] = time.time()
         user_subject_study[member.id] = {"subject": "Tự do", "start_time": time.time()}
         
         embed = discord.Embed(
-            title="🎉 CHÀO MỪNG BẠN ĐÃ BẬT CAM HỌC TẬP! 🎉",
-            description=f"Chào mừng {member.mention} đã bật camera học cùng mọi người nha! 🌸✨\n\n👉 **Hãy chọn môn học bên dưới nhé:**",
+            title="🎉 BẮT ĐẦU TÍCH LŨY GIỜ HỌC! 🎉",
+            description=f"{member.mention} đã bật camera học cùng mọi người rồi nè! 🌸✨\n\n👉 **Hãy chọn môn học bên dưới bảng tương tác nhé:**",
             color=discord.Color.green()
         )
         view = SubjectSelectView(member.id)
@@ -201,6 +220,7 @@ async def on_voice_state_update(member, before, after):
         except Exception:
             pass
 
+    # 4. Khi tắt camera hoặc RỜI phòng voice (Tổng kết & Tạm biệt)
     elif (before.self_video and not after.self_video) or (before.channel and not after.channel and member.id in user_cam_start):
         if member.id in user_cam_start:
             start_t = user_cam_start.pop(member.id)
@@ -225,18 +245,18 @@ async def on_voice_state_update(member, before, after):
                 time_str += f"{seconds} giây"
 
                 msg = (
-                    f"👋 Tạm biệt {member.mention}! Cảm ơn bạn đã nỗ lực học tập cùng mọi người nhé. "
-                    f"**Chúc bạn một ngày vui vẻ và tràn đầy năng lượng!** 🌸✨ ( ˘ ³˘)♥\n\n"
-                    f"📚 **Môn học:** {subject_name}\n"
-                    f"⏱️ **Tổng thời gian bạn đã học:** **{time_str}**"
+                    f"👋 Tạm biệt {member.mention}! Cảm ơn bạn vì đã nỗ lực hết mình hôm nay. "
+                    f"**Chúc bạn nghỉ ngơi thật thoải mái và nạp lại năng lượng nhé!** 🌸✨ ( ˘ ³˘)♥\n\n"
+                    f"📚 **Môn học đã học:** {subject_name}\n"
+                    f"⏱️ **Thời gian tập trung:** **{time_str}**"
                 )
                 if earned_clovers > 0:
-                    msg += f"\n🍀 **Phần thưởng tích lũy:** +{earned_clovers} Cỏ 4 Lá!"
+                    msg += f"\n🍀 **Phần thưởng nhận được:** +{earned_clovers} Cỏ 4 Lá!"
                 await chan.send(msg)
 
+    # Xóa phòng voice trống do bot tạo
     if before.channel and len(before.channel.members) == 0 and before.channel.name.startswith("🌸 Phòng Học Của"):
         await before.channel.delete()
-
 # --- 📊 HỆ THỐNG BÁO CÁO HỌC TẬP LINH HOẠT ---
 @bot.command()
 async def baocao(ctx, mode: str = "ngay", *, target: str = None):
@@ -433,33 +453,64 @@ async def setup_server(ctx):
     if not is_bql(ctx): return
     guild = ctx.guild
     
-    role_ky_luat = discord.utils.get(guild.roles, name="🚨 Vi Phạm Kỷ Luật")
-    if not role_ky_luat:
-        await guild.create_role(name="🚨 Vi Phạm Kỷ Luật", color=discord.Color.dark_gray())
-
-    category = discord.utils.get(guild.categories, name="🌸 KHU VỰC HỌC TẬP")
-    if not category:
-        category = await guild.create_category("🌸 KHU VỰC HỌC TẬP")
-
-    channels_to_create = [
-        ("🌸·tạo-phòng-học", "voice"),
-        ("⚠️·kênh-kỷ-luật", "text")
+    # 1. TẠO CÁC ROLE QUAN TRỌNG
+    roles_to_create = [
+        ("👑 Chủ Server", discord.Color.red()),
+        ("🛡️ Quản Trị Viên (BQL)", discord.Color.orange()),
+        ("⭐ Ong Chăm Chỉ", discord.Color.gold()),
+        ("📚 Thành Viên Học Tập", discord.Color.blue()),
+        ("🚨 Vi Phạm Kỷ Luật", discord.Color.dark_gray())
     ]
+    
+    for r_name, r_color in roles_to_create:
+        if not discord.utils.get(guild.roles, name=r_name):
+            await guild.create_role(name=r_name, color=r_color)
 
-    for name, c_type in channels_to_create:
-        existing = discord.utils.get(guild.channels, name=name)
-        if not existing:
-            if c_type == "voice":
-                await guild.create_voice_channel(name, category=category)
-            else:
-                chan = await guild.create_text_channel(name, category=category)
-                role = discord.utils.get(guild.roles, name="🚨 Vi Phạm Kỷ Luật")
-                if role:
-                    await chan.set_permissions(role, read_messages=True, send_messages=True)
-                    await chan.set_permissions(guild.default_role, read_messages=False)
+    # 2. TẠO CÁC DANH MỤC VÀ HỆ THỐNG KÊNH CHUYÊN NGHIỆP
+    categories_structure = {
+        "📌 THÔNG TIN CHUNG": [
+            ("📢·thông-báo", "text"),
+            ("📜·nội-quy-server", "text"),
+            ("🛒·shop-cỏ-4-lá", "text")
+        ],
+        "🌸 KHU VỰC HỌC TẬP": [
+            ("🌸·chung", "text"),
+            ("📚·chia-sẻ-tài-liệu", "text"),
+            ("🧠·trắc-nghiệm-mỗi-ngày", "text"),
+            ("🌸·tạo-phòng-học", "voice"),
+            ("🎧·phòng-tập-trung-1", "voice"),
+            ("🎧·phòng-tập-trung-2", "voice")
+        ],
+        "☕ GÓC THƯ GIÃN": [
+            ("💬·trò-chuyện-chung", "text"),
+            ("📸·khoảnh-khắc-mỗi-ngày", "text"),
+            ("🎵·âm-nhạc-thư-giãn", "voice")
+        ],
+        "🛡️ HỆ THỐNG KỶ LUẬT": [
+            ("⚠️·kênh-kỷ-luật", "text")
+        ]
+    }
 
-    await ctx.send("✅ Đã refresh và thiết lập cấu trúc server thành công! 🚀✨ ( •̀ ω •́ )✧")
+    role_ky_luat = discord.utils.get(guild.roles, name="🚨 Vi Phạm Kỷ Luật")
 
+    for cat_name, channels in categories_structure.items():
+        category = discord.utils.get(guild.categories, name=cat_name)
+        if not category:
+            category = await guild.create_category(cat_name)
+        
+        for c_name, c_type in channels:
+            existing = discord.utils.get(guild.channels, name=c_name)
+            if not existing:
+                if c_type == "voice":
+                    await guild.create_voice_channel(c_name, category=category)
+                else:
+                    chan = await guild.create_text_channel(c_name, category=category)
+                    # Nếu là kênh kỷ luật thì khóa với mọi người, chỉ cho role kỷ luật và admin thấy
+                    if c_name == "⚠️·kênh-kỷ-luật" and role_ky_luat:
+                        await chan.set_permissions(role_ky_luat, read_messages=True, send_messages=True)
+                        await chan.set_permissions(guild.default_role, read_messages=False)
+
+    await ctx.send("✅ Đã thiết lập hoàn tất toàn bộ **Role quan trọng** và **Hệ thống kênh chuyên nghiệp** cho Server! 🚀✨ ( •̀ ω •́ )✧")
 @bot.command()
 async def xem_phat(ctx):
     conn = sqlite3.connect("study_data.db")
