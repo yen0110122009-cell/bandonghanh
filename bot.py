@@ -44,11 +44,9 @@ DEFAULT_SUBJECTS = [
 
 # --- DỮ LIỆU CỬA HÀNG (SHOP) ---
 SHOP_ITEMS = {
-    "1": {"name": "🎫 Thẻ Đổi Tên", "price": 50, "desc": "Đổi biệt danh tùy thích trong Server"},
-    "2": {"name": "❄️ Thẻ Đóng Băng", "price": 100, "desc": "Bảo toàn chuỗi học tập (Streak) khi nghỉ 1 ngày"},
-    "3": {"name": "🎨 Vai Trò Sắc Màu", "price": 200, "desc": "Sở hữu một vai trò với màu sắc tự chọn trong 1 tuần"}
+ SHOP_ITEMS = {
+    "1": {"name": "❄️ Thẻ Đóng Băng Streak", "price": 100, "desc": "Bảo toàn chuỗi học tập liên tục của bạn khi nghỉ 1 ngày"}
 }
-
 # --- DATABASE TỔNG HỢP ---
 def init_db():
     conn = sqlite3.connect("study_data.db")
@@ -62,6 +60,7 @@ def init_db():
     cursor.execute("CREATE TABLE IF NOT EXISTS user_inventory (user_id INTEGER, item_name TEXT, amount INTEGER DEFAULT 0, PRIMARY KEY (user_id, item_name))")
     cursor.execute("CREATE TABLE IF NOT EXISTS subject_freq (user_id INTEGER, subject TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (user_id, subject))")
     cursor.execute("CREATE TABLE IF NOT EXISTS dynamic_punishments (level TEXT PRIMARY KEY, clovers_deduct INTEGER DEFAULT 0, description TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS user_streak (user_id INTEGER PRIMARY KEY, current_streak INTEGER DEFAULT 0, last_study_date TEXT)")
     
     cursor.execute("SELECT COUNT(*) FROM dynamic_punishments")
     if cursor.fetchone()[0] == 0:
@@ -176,8 +175,6 @@ class SubjectSelectView(View):
         super().__init__(timeout=timeout)
         self.user_id = user_id
         self.add_item(SubjectSelect(user_id))
-
-# --- ⏱️ THEO DÕI CAMERA & TÍNH THỜI GIAN ---
 # --- ⏱️ THEO DÕI CAMERA, VOICE, CHÀO MỪNG & TẠM BIỆT ---
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -190,13 +187,12 @@ async def on_voice_state_update(member, before, after):
 
     # 2. Thành viên VÀO phòng voice (Gửi câu chào mừng ngọt ngào)
     if before.channel is None and after.channel is not None:
-        # Tìm kênh chat chung hoặc kênh thông báo để chào mừng (nếu có)
         welcome_chan = discord.utils.get(member.guild.text_channels, name="🌸·chung") or after.channel
         embed_welcome = discord.Embed(
             title="✨ CHÀO MỪNG BẠN ĐÃ ĐẾN VỚI GÓC HỌC TẬP! ✨",
             description=f"Chào mừng {member.mention} đã vào phòng voice **{after.channel.name}**! 🌸🐝\n\n"
                         f"*Chúc Ong có một buổi học tập thật năng suất, tập trung và đạt kết quả cao nha!* ( •̀ ω •́ )✧\n"
-                        f"💡 *Gợi ý:* Hãy bật camera để tích lũy thời gian học và nhận Cỏ 4 Lá 🍀 nhé!",
+                        f"💡 *Gợi ý:* Hãy bật camera để tích lũy thời gian học, đổi Cỏ 4 Lá 🍀 và duy trì chuỗi học tập nhé!",
             color=discord.Color.gold()
         )
         try:
@@ -220,12 +216,13 @@ async def on_voice_state_update(member, before, after):
         except Exception:
             pass
 
-    # 4. Khi tắt camera hoặc RỜI phòng voice (Tổng kết & Tạm biệt)
+    # 4. Khi tắt camera hoặc RỜI phòng voice (Tổng kết, quy đổi 1:9, tính Streak & Tạm biệt)
     elif (before.self_video and not after.self_video) or (before.channel and not after.channel and member.id in user_cam_start):
         if member.id in user_cam_start:
             start_t = user_cam_start.pop(member.id)
             duration = int(time.time() - start_t)
-            
+            duration_minutes = duration // 60
+
             hours = duration // 3600
             minutes = (duration % 3600) // 60
             seconds = duration % 60
@@ -234,9 +231,35 @@ async def on_voice_state_update(member, before, after):
             subject_name = subject_info["subject"]
             
             add_study_time(member.id, subject_name, duration)
-            earned_clovers = (duration // 1800) * 5
+            
+            # 🍀 QUY ĐỔI CỎ 4 LÁ THEO MỐC 1:9 (Cứ 9 phút = 1 Cỏ 4 Lá)
+            earned_clovers = duration_minutes // 9
             if earned_clovers > 0:
                 add_clovers(member.id, earned_clovers)
+
+            # 🔥 TÍNH TOÁN & CẬP NHẬT CHUỖI HỌC (STREAK)
+            today_str = datetime.now().strftime("%d/%m/%Y")
+            yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+            
+            conn = sqlite3.connect("study_data.db")
+            cursor = conn.cursor()
+            cursor.execute("SELECT current_streak, last_study_date FROM user_streak WHERE user_id = ?", (member.id,))
+            streak_row = cursor.fetchone()
+            
+            current_streak = 1
+            if streak_row:
+                last_date = streak_row[1]
+                if last_date == today_str:
+                    current_streak = streak_row[0]
+                elif last_date == yesterday_str:
+                    current_streak = streak_row[0] + 1
+                else:
+                    current_streak = 1
+                cursor.execute("UPDATE user_streak SET current_streak = ?, last_study_date = ? WHERE user_id = ?", (current_streak, today_str, member.id))
+            else:
+                cursor.execute("INSERT INTO user_streak (user_id, current_streak, last_study_date) VALUES (?, ?, ?)", (member.id, 1, today_str))
+            conn.commit()
+            conn.close()
 
             chan = before.channel or after.channel
             if chan:
@@ -248,13 +271,13 @@ async def on_voice_state_update(member, before, after):
                     f"👋 Tạm biệt {member.mention}! Cảm ơn bạn vì đã nỗ lực hết mình hôm nay. "
                     f"**Chúc bạn nghỉ ngơi thật thoải mái và nạp lại năng lượng nhé!** 🌸✨ ( ˘ ³˘)♥\n\n"
                     f"📚 **Môn học đã học:** {subject_name}\n"
-                    f"⏱️ **Thời gian tập trung:** **{time_str}**"
+                    f"⏱️ **Thời gian tập trung:** **{time_str}**\n"
+                    f"🔥 **Chuỗi học tập hiện tại:** **{current_streak} ngày liên tiếp**!"
                 )
                 if earned_clovers > 0:
-                    msg += f"\n🍀 **Phần thưởng nhận được:** +{earned_clovers} Cỏ 4 Lá!"
+                    msg += f"\n🍀 **Quy đổi (Mốc 1:9):** Nhận được **+{earned_clovers} Cỏ 4 Lá**!"
                 await chan.send(msg)
 
-    # Xóa phòng voice trống do bot tạo
     if before.channel and len(before.channel.members) == 0 and before.channel.name.startswith("🌸 Phòng Học Của"):
         await before.channel.delete()
 # --- 📊 HỆ THỐNG BÁO CÁO HỌC TẬP LINH HOẠT ---
