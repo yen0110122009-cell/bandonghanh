@@ -228,7 +228,7 @@ async def expire_room(channel_id, seconds):
         return
 
 
-@bot.command(aliases=["xoa_phong", "xoaphong"])
+@bot.command(aliases=["xoa_phong"])
 async def xoaphong(ctx):
     channel = ctx.author.voice.channel if ctx.author.voice else None
     if not isinstance(channel, discord.VoiceChannel):
