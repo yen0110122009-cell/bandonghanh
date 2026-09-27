@@ -176,7 +176,6 @@ class SubjectSelectView(View):
         self.user_id = user_id
         self.add_item(SubjectSelect(user_id))
 
-```python
 # ============================================================
 # 🌸 HỆ THỐNG VOICE HỌC TẬP
 # - Không tự tạo phòng
