@@ -460,33 +460,58 @@ async def tuido(ctx):
         embed.description = "Túi đồ của bạn đang trống! Hãy chăm chỉ học tập kiếm Cỏ để mua sắm nhé! 🌸"
     await ctx.send(embed=embed)
 # --- ⏰ 1. TÍNH NĂNG NHẮC NHỞ TỰ ĐỘNG (!nhacnho) ---
+import datetime
+
 @bot.command()
 async def nhacnho(ctx, ngay: str, gio: str, *, noi_dung: str):
     """
     Cú pháp: !nhacnho YYYY-MM-DD HH:MM Nội dung
     Ví dụ: !nhacnho 2026-09-08 20:30 Ôn tập môn Toán
     """
-    import datetime
+    user_id = ctx.author.id
     try:
         target_time = datetime.datetime.strptime(f"{ngay} {gio}", "%Y-%m-%d %H:%M")
         now = datetime.datetime.now()
-
+        
         if target_time <= now:
             await ctx.send(f"⚠️ {ctx.author.mention} ơi, thời gian hẹn phải ở trong tương lai nha! (｡•́‿•̀｡)")
             return
-
+            
         seconds = (target_time - now).total_seconds()
-        await ctx.send(f"⏳ Đã cài lịch nhắc thành công cho {ctx.author.mention} vào lúc **{ngay} {gio}** với nội dung: *'{noi_dung}'*! ( •̀ ω •́ )✧")
+        
+        # Khởi tạo kho lưu trữ của user nếu chưa có
+        if user_id not in active_reminders:
+            active_reminders[user_id] = {}
+            
+        # Tạo ID tự động tăng cho nhắc nhở của user
+        r_id = 1 if not active_reminders[user_id] else max(active_reminders[user_id].keys()) + 1
+        
+        # Hàm chạy ngầm để đợi đến giờ báo thức
+        async def send_reminder_task():
+            try:
+                await asyncio.sleep(seconds)
+                embed_remind = discord.Embed(
+                    title="⏰ BÁO THỨC / NHẮC NHỞ ĐÃ ĐẾN GIỜ! ⏰",
+                    description=f"Ey {ctx.author.mention} ơi! Đã đến thời gian hẹn **{ngay} {gio}** rồi nè!\n\n📌 **Nội dung:** {noi_dung}\n\n*Hành động ngay thôi Ong ơi!* 💪🔥 (๑•̀ㅂ•́)و✧",
+                    color=discord.Color.gold()
+                )
+                await ctx.send(content=f"{ctx.author.mention}", embed=embed_remind)
+                # Xóa khỏi bộ nhớ sau khi đã báo thành công
+                if user_id in active_reminders and r_id in active_reminders[user_id]:
+                    del active_reminders[user_id][r_id]
+            except asyncio.CancelledError:
+                pass # Bị hủy bỏ khi người dùng gọi lệnh tắt
 
-        await asyncio.sleep(seconds)
-
-        embed_remind = discord.Embed(
-            title="⏰ BÁO THỨC / NHẮC NHỞ ĐÃ ĐẾN GIỜ! ⏰",
-            description=f"Ey {ctx.author.mention} ơi! Đã đến thời gian hẹn **{ngay} {gio}** rồi nè!\n\n📌 **Nội dung:** {noi_dung}\n\n*Hành động ngay thôi Ong ơi!* 💪🔥 (๑•̀ㅂ•́)و✧",
-            color=discord.Color.gold()
-        )
-        await ctx.send(content=f"{ctx.author.mention}", embed=embed_remind)
-
+        # Chạy task nền và lưu lại
+        task = bot.loop.create_task(send_reminder_task())
+        active_reminders[user_id][r_id] = {
+            "time": target_time,
+            "content": noi_dung,
+            "task": task
+        }
+        
+        await ctx.send(f"⏳ Đã cài lịch nhắc thành công (ID: **{r_id}**) cho {ctx.author.mention} vào lúc **{ngay} {gio}** với nội dung: *'{noi_dung}'*! ( •̀ ω •́ )✧")
+        
     except ValueError:
         await ctx.send(f"⚠️ {ctx.author.mention} ơi, định dạng ngày giờ chưa đúng! Hãy dùng chuẩn `YYYY-MM-DD HH:MM` (Ví dụ: `2026-09-08 20:30`) nha! 🌸")
         
