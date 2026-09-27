@@ -1187,7 +1187,589 @@ async def tuido(ctx):
     else:
         embed.description = "Túi đồ của bạn đang trống! Hãy chăm chỉ học tập kiếm Cỏ để mua sắm nhé! 🌸"
     await ctx.send(embed=embed)
-    
+
+# ============================================================
+# ⏰ HỆ THỐNG NHẮC NHỞ CÁ NHÂN
+# ============================================================
+# Cách dùng:
+#
+# !nhacnho 28/09/2026 20:30 Ôn Toán
+# !nhacnho 29/09/2026 07:00 Học từ vựng
+#
+# Xem các nhắc nhở:
+# !nhacnho xem
+#
+# Xóa nhắc nhở:
+# !nhacnho xoa 1
+#
+# ============================================================
+
+import asyncio
+import sqlite3
+from datetime import datetime
+
+
+# ============================================================
+# 📦 TẠO BẢNG REMINDER
+# ============================================================
+
+def init_reminder_database():
+
+    conn = sqlite3.connect(
+        "study_data.db"
+    )
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER NOT NULL,
+            reminder_time TEXT NOT NULL,
+            content TEXT NOT NULL,
+            completed INTEGER DEFAULT 0
+        )
+        """
+    )
+
+    conn.commit()
+    conn.close()
+
+
+init_reminder_database()
+
+
+# ============================================================
+# ➕ THÊM NHẮC NHỞ
+# ============================================================
+
+@bot.command(
+    name="nhacnho"
+)
+async def nhacnho(
+    ctx,
+    action_or_date: str = None,
+    gio_or_id: str = None,
+    *,
+    noi_dung: str = None
+):
+
+    # ========================================================
+    # 📋 !nhacnho xem
+    # ========================================================
+
+    if action_or_date and action_or_date.lower() == "xem":
+
+        conn = sqlite3.connect(
+            "study_data.db"
+        )
+
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT
+                id,
+                reminder_time,
+                content
+            FROM reminders
+            WHERE user_id = ?
+            AND guild_id = ?
+            AND completed = 0
+            ORDER BY reminder_time ASC
+            """,
+            (
+                ctx.author.id,
+                ctx.guild.id
+            )
+        )
+
+        reminders = cursor.fetchall()
+
+        conn.close()
+
+        if not reminders:
+
+            await ctx.send(
+                f"📋 {ctx.author.mention}, "
+                f"bạn hiện không có nhắc nhở nào."
+            )
+
+            return
+
+        embed = discord.Embed(
+            title="⏰ NHẮC NHỞ CỦA BẠN",
+            description=(
+                "🌸 Đây là toàn bộ lịch nhắc nhở "
+                "mà bạn đang đặt:"
+            ),
+            color=discord.Color.gold()
+        )
+
+        for reminder_id, reminder_time, content in reminders:
+
+            try:
+
+                dt = datetime.strptime(
+                    reminder_time,
+                    "%Y-%m-%d %H:%M:%S"
+                )
+
+                time_display = dt.strftime(
+                    "%d/%m/%Y • %H:%M"
+                )
+
+            except:
+
+                time_display = reminder_time
+
+            embed.add_field(
+                name=(
+                    f"⏰ Nhắc nhở #{reminder_id}"
+                ),
+                value=(
+                    f"📅 **{time_display}**\n"
+                    f"📝 {content}\n"
+                    f"🗑️ Xóa bằng: "
+                    f"`!nhacnho xoa {reminder_id}`"
+                ),
+                inline=False
+            )
+
+        embed.set_footer(
+            text=(
+                "Không xóa thì bot sẽ tự động "
+                "nhắc bạn đúng thời gian."
+            )
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+        return
+
+
+    # ========================================================
+    # 🗑️ !nhacnho xoa ID
+    # ========================================================
+
+    if action_or_date and action_or_date.lower() == "xoa":
+
+        if not gio_or_id:
+
+            await ctx.send(
+                "❌ Bạn chưa nhập ID nhắc nhở!\n\n"
+                "Ví dụ:\n"
+                "`!nhacnho xoa 3`"
+            )
+
+            return
+
+        try:
+
+            reminder_id = int(
+                gio_or_id
+            )
+
+        except ValueError:
+
+            await ctx.send(
+                "❌ ID nhắc nhở phải là số.\n\n"
+                "Ví dụ:\n"
+                "`!nhacnho xoa 3`"
+            )
+
+            return
+
+        conn = sqlite3.connect(
+            "study_data.db"
+        )
+
+        cursor = conn.cursor()
+
+        # Chỉ cho phép người đặt lịch
+        # xóa lịch của chính mình
+        cursor.execute(
+            """
+            SELECT reminder_time, content
+            FROM reminders
+            WHERE id = ?
+            AND user_id = ?
+            AND guild_id = ?
+            AND completed = 0
+            """,
+            (
+                reminder_id,
+                ctx.author.id,
+                ctx.guild.id
+            )
+        )
+
+        reminder = cursor.fetchone()
+
+        if not reminder:
+
+            conn.close()
+
+            await ctx.send(
+                f"❌ Không tìm thấy nhắc nhở "
+                f"**#{reminder_id}** của bạn."
+            )
+
+            return
+
+        cursor.execute(
+            """
+            DELETE FROM reminders
+            WHERE id = ?
+            AND user_id = ?
+            AND guild_id = ?
+            """,
+            (
+                reminder_id,
+                ctx.author.id,
+                ctx.guild.id
+            )
+        )
+
+        conn.commit()
+        conn.close()
+
+        await ctx.send(
+            f"🗑️ Đã xóa nhắc nhở "
+            f"**#{reminder_id}** thành công!\n\n"
+            f"📝 Nội dung: **{reminder[1]}**"
+        )
+
+        return
+
+
+    # ========================================================
+    # ❌ KIỂM TRA CÚ PHÁP
+    # ========================================================
+
+    if (
+        not action_or_date
+        or not gio_or_id
+        or not noi_dung
+    ):
+
+        await ctx.send(
+            "❌ **Cách sử dụng lệnh `!nhacnho`:**\n\n"
+
+            "⏰ **Đặt nhắc nhở:**\n"
+            "`!nhacnho DD/MM/YYYY HH:MM Nội dung`\n\n"
+
+            "📋 **Xem nhắc nhở:**\n"
+            "`!nhacnho xem`\n\n"
+
+            "🗑️ **Xóa nhắc nhở:**\n"
+            "`!nhacnho xoa ID`\n\n"
+
+            "🌸 **Ví dụ:**\n"
+            "`!nhacnho 28/09/2026 20:30 Ôn Toán`"
+        )
+
+        return
+
+
+    # ========================================================
+    # 📅 PHÂN TÍCH NGÀY + GIỜ
+    # ========================================================
+
+    try:
+
+        reminder_datetime = datetime.strptime(
+            f"{action_or_date} {gio_or_id}",
+            "%d/%m/%Y %H:%M"
+        )
+
+    except ValueError:
+
+        await ctx.send(
+            "❌ Ngày hoặc giờ không đúng định dạng!\n\n"
+
+            "📌 Đúng:\n"
+            "`!nhacnho 28/09/2026 20:30 Ôn Toán`\n\n"
+
+            "📅 Ngày: `DD/MM/YYYY`\n"
+            "🕐 Giờ: `HH:MM`"
+        )
+
+        return
+
+
+    # ========================================================
+    # ⛔ KHÔNG CHO ĐẶT LỊCH TRONG QUÁ KHỨ
+    # ========================================================
+
+    if reminder_datetime <= datetime.now():
+
+        await ctx.send(
+            "⚠️ Thời gian nhắc nhở phải nằm "
+            "ở tương lai nha Ong! 🐝"
+        )
+
+        return
+
+
+    # ========================================================
+    # 💾 LƯU DATABASE
+    # ========================================================
+
+    conn = sqlite3.connect(
+        "study_data.db"
+    )
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO reminders
+        (
+            user_id,
+            guild_id,
+            reminder_time,
+            content,
+            completed
+        )
+        VALUES (?, ?, ?, ?, 0)
+        """,
+        (
+            ctx.author.id,
+            ctx.guild.id,
+            reminder_datetime.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            noi_dung
+        )
+    )
+
+    reminder_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+
+    # ========================================================
+    # ✅ THÔNG BÁO ĐẶT THÀNH CÔNG
+    # ========================================================
+
+    embed = discord.Embed(
+        title="⏰ ĐẶT NHẮC NHỞ THÀNH CÔNG!",
+        description=(
+            f"{ctx.author.mention}, bot đã lưu "
+            f"nhắc nhở của bạn rồi! 🌸🐝\n\n"
+
+            f"🆔 **Mã nhắc nhở:** "
+            f"`#{reminder_id}`\n"
+
+            f"📅 **Ngày:** "
+            f"{reminder_datetime.strftime('%d/%m/%Y')}\n"
+
+            f"🕐 **Giờ:** "
+            f"{reminder_datetime.strftime('%H:%M')}\n"
+
+            f"📝 **Nội dung:** "
+            f"{noi_dung}\n\n"
+
+            f"💡 Muốn xem lại:\n"
+            f"`!nhacnho xem`\n\n"
+
+            f"🗑️ Muốn xóa:\n"
+            f"`!nhacnho xoa {reminder_id}`"
+        ),
+        color=discord.Color.green()
+    )
+
+    await ctx.send(
+        embed=embed
+    )
+
+
+# ============================================================
+# 🔔 VÒNG KIỂM TRA NHẮC NHỞ
+# ============================================================
+
+async def reminder_loop():
+
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+
+        try:
+
+            now = datetime.now()
+
+            conn = sqlite3.connect(
+                "study_data.db"
+            )
+
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    user_id,
+                    guild_id,
+                    reminder_time,
+                    content
+                FROM reminders
+                WHERE completed = 0
+                """
+            )
+
+            reminders = cursor.fetchall()
+
+            for (
+                reminder_id,
+                user_id,
+                guild_id,
+                reminder_time,
+                content
+            ) in reminders:
+
+                try:
+
+                    reminder_datetime = datetime.strptime(
+                        reminder_time,
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+
+                except ValueError:
+
+                    continue
+
+
+                # ============================================
+                # ⏰ ĐÃ ĐẾN GIỜ
+                # ============================================
+
+                if reminder_datetime <= now:
+
+                    guild = bot.get_guild(
+                        guild_id
+                    )
+
+                    if not guild:
+                        continue
+
+                    member = guild.get_member(
+                        user_id
+                    )
+
+                    if not member:
+                        continue
+
+                    # ========================================
+                    # GỬI NHẮC NHỞ
+                    # ========================================
+
+                    try:
+
+                        await member.send(
+                            content=(
+                                f"⏰ **ĐẾN GIỜ NHẮC NHỞ RỒI NÈ ONG!** "
+                                f"{member.mention} 🌸🐝"
+                            ),
+                            embed=discord.Embed(
+                                title="⏰ NHẮC NHỞ HỌC TẬP",
+                                description=(
+                                    f"🔔 **Nội dung:** "
+                                    f"{content}\n\n"
+
+                                    f"📅 **Ngày:** "
+                                    f"{reminder_datetime.strftime('%d/%m/%Y')}\n"
+
+                                    f"🕐 **Giờ:** "
+                                    f"{reminder_datetime.strftime('%H:%M')}\n\n"
+
+                                    f"💪 Đừng quên hoàn thành "
+                                    f"việc mà Ong đã đặt lịch nhé! "
+                                    f"🌸✨"
+                                ),
+                                color=discord.Color.gold()
+                            )
+                        )
+
+                    except discord.Forbidden:
+
+                        # Nếu không gửi DM được,
+                        # gửi vào kênh chung
+                        channel = discord.utils.get(
+                            guild.text_channels,
+                            name="🌸·chung"
+                        )
+
+                        if channel:
+
+                            await channel.send(
+                                content=(
+                                    f"⏰ {member.mention} "
+                                    f"**đến giờ nhắc nhở rồi!** 🌸"
+                                ),
+                                embed=discord.Embed(
+                                    title="⏰ NHẮC NHỞ",
+                                    description=content,
+                                    color=discord.Color.gold()
+                                )
+                            )
+
+
+                    # ========================================
+                    # ĐÁNH DẤU ĐÃ HOÀN THÀNH
+                    # ========================================
+
+                    cursor.execute(
+                        """
+                        UPDATE reminders
+                        SET completed = 1
+                        WHERE id = ?
+                        """,
+                        (reminder_id,)
+                    )
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+
+            print(
+                f"[REMINDER LOOP ERROR] {e}"
+            )
+
+        # Kiểm tra mỗi 10 giây
+        await asyncio.sleep(10)
+
+
+# ============================================================
+# 🚀 KHỞI ĐỘNG REMINDER LOOP
+# ============================================================
+
+@bot.event
+async def on_ready():
+
+    # Tránh tạo nhiều loop nếu Discord reconnect
+    if not hasattr(
+        bot,
+        "reminder_loop_started"
+    ):
+
+        bot.reminder_loop_started = True
+
+        bot.loop.create_task(
+            reminder_loop()
+        )
+
+    print(
+        f"✅ Reminder system đã hoạt động "
+        f"với tài khoản {bot.user}"
+    )
+
 # --- 🛠️ LỆNH REFRESH / TẠO SERVER & KỶ LUẬT ---
 @bot.command()
 async def setup_server(ctx):
