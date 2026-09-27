@@ -256,7 +256,7 @@ async def xoaphong(ctx):
     await ctx.send(f"🗑️ Phòng **{name}** đã được xóa.")
 
 
-@bot.command(aliases=["giahan_phong", "giahanphong"])
+@bot.command(aliases=["giahan_phong"])
 async def giahanphong(ctx, thoi_gian: str = None):
     channel = ctx.author.voice.channel if ctx.author.voice else None
     if not isinstance(channel, discord.VoiceChannel):
@@ -310,7 +310,7 @@ async def giahanphong(ctx, thoi_gian: str = None):
     )
 
 
-@bot.command(aliases=["phonginfo", "thongtinphong"])
+@bot.command(aliases=["phonginfo"])
 async def thongtinphong(ctx):
     channel = ctx.author.voice.channel if ctx.author.voice else None
     if not isinstance(channel, discord.VoiceChannel):
