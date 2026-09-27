@@ -2,17 +2,19 @@ import os
 import time
 import random
 import sqlite3
+import asyncio
+from datetime import datetime, timedelta
 from threading import Thread
 from flask import Flask
 import discord
 from discord.ext import commands
+from discord.ui import View, Select, Modal, TextInput
 
-# --- 🌐 TẠO WEB SERVER ĐỂ RENDER HEALTH CHECK 24/7 ---
+# --- 🌐 SERVER KEEP-ALIVE RENDER 24/7 ---
 app = Flask('')
-
 @app.route('/')
 def home():
-    return "Bot Ong & Cỏ 4 Lá đang hoạt động 24/7! 🌸🐝🍀"
+    return "Bot Ong & Cỏ 4 Lá đang hoạt động! 🌸🐝🍀"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -26,61 +28,70 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Biến lưu thời gian học:
-user_voice_start = {}
+user_cam_start = {}
 user_subject_study = {}
+BQL_ROLES = ["Chủ Server", "Quản Trị Viên"]
 
-# --- KHỞI TẠO DATABASE SQLITE ---
+# Danh sách môn học mặc định ban đầu
+DEFAULT_SUBJECTS = [
+    "Toán Học", "Vật Lý", "Hóa Học", "Ngữ Văn", "Tiếng Anh",
+    "Sinh Học", "Lịch Sử", "Địa Lý", "Giáo Dục Công Dân",
+    "Giáo Dục Địa Phương", "Kiến Thức Chuyên Ngành (Đại học)",
+    "Kỹ Năng Mềm / Tiếng Anh Chuyên Ngành", "Tự do"
+]
+
+# --- DỮ LIỆU CỬA HÀNG (SHOP) ---
+SHOP_ITEMS = {
+    "1": {"name": "🎫 Thẻ Đổi Tên", "price": 50, "desc": "Đổi biệt danh tùy thích trong Server"},
+    "2": {"name": "❄️ Thẻ Đóng Băng", "price": 100, "desc": "Bảo toàn chuỗi học tập (Streak) khi nghỉ 1 ngày"},
+    "3": {"name": "🎨 Vai Trò Sắc Màu", "price": 200, "desc": "Sở hữu một vai trò với màu sắc tự chọn trong 1 tuần"}
+}
+
+# --- DATABASE TỔNG HỢP ---
 def init_db():
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
-    # Bảng Ví Cỏ 4 Lá
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_clovers (
-            user_id INTEGER PRIMARY KEY,
-            clovers INTEGER DEFAULT 0
-        )
-    """)
-    # Bảng Tổng Giờ Học (giây)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_study (
-            user_id INTEGER PRIMARY KEY,
-            total_time INTEGER DEFAULT 0
-        )
-    """)
-    # Bảng Thời Gian Học Theo Từng Môn (giây)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS subject_study (
-            user_id INTEGER,
-            subject TEXT,
-            duration INTEGER DEFAULT 0,
-            PRIMARY KEY (user_id, subject)
-        )
-    """)
-    # Bảng Streak & Thẻ Đóng Băng
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_streaks (
-            user_id INTEGER PRIMARY KEY,
-            streak_days INTEGER DEFAULT 0,
-            freeze_cards INTEGER DEFAULT 0
-        )
-    """)
-    # Bảng Kỷ Luật / Vi Phạm
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_penalties (
-            user_id INTEGER PRIMARY KEY,
-            warnings INTEGER DEFAULT 0
-        )
-    """)
+    
+    cursor.execute("CREATE TABLE IF NOT EXISTS user_clovers (user_id INTEGER PRIMARY KEY, clovers INTEGER DEFAULT 0)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS daily_study (user_id INTEGER, date TEXT, subject TEXT, duration INTEGER, PRIMARY KEY (user_id, date, subject))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS subject_study (user_id INTEGER, subject TEXT, duration INTEGER DEFAULT 0, PRIMARY KEY (user_id, subject))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS user_study (user_id INTEGER PRIMARY KEY, total_time INTEGER DEFAULT 0)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS quiz_limits (user_id INTEGER, date TEXT, attempts INTEGER DEFAULT 0, PRIMARY KEY (user_id, date))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS user_inventory (user_id INTEGER, item_name TEXT, amount INTEGER DEFAULT 0, PRIMARY KEY (user_id, item_name))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS subject_freq (user_id INTEGER, subject TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (user_id, subject))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS dynamic_punishments (level TEXT PRIMARY KEY, clovers_deduct INTEGER DEFAULT 0, description TEXT)")
+    
+    cursor.execute("SELECT COUNT(*) FROM dynamic_punishments")
+    if cursor.fetchone()[0] == 0:
+        defaults = [
+            ("1", 5, "📝 **Viết bản tường trình:** Giải thích lý do AFK / Vi phạm ngắn hạn."),
+            ("2", 10, "✍️ **Viết bản kiểm điểm:** Trình bày lỗi sai và cam kết không tái phạm."),
+            ("3", 15, "🏃‍♀️ **Phạt thể lực nhẹ:** Quay video nhảy dây 20 cái, gửi lên kênh kỷ luật."),
+            ("4", 20, "🏋️‍♀️ **Phạt thể lực nặng:** Quay video nhảy dây 50 cái + Viết bản kiểm điểm nghiêm túc.")
+        ]
+        cursor.executemany("INSERT INTO dynamic_punishments VALUES (?, ?, ?)", defaults)
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- CÁC HÀM XỬ LÝ DATABASE ---
+# --- HÀM HỖ TRỢ ---
+def is_bql(ctx):
+    if ctx.author.guild_permissions.administrator:
+        return True
+    user_roles = [r.name for r in ctx.author.roles]
+    return any(role in user_roles for role in BQL_ROLES)
+
+def add_clovers(user_id, amount):
+    conn = sqlite3.connect("study_data.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO user_clovers (user_id, clovers) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET clovers = clovers + ?", (user_id, amount, amount))
+    conn.commit()
+    conn.close()
+
 def get_clovers(user_id):
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
@@ -89,370 +100,443 @@ def get_clovers(user_id):
     conn.close()
     return row[0] if row else 0
 
-def add_clovers(user_id, amount):
+def record_subject_choice(user_id, subject):
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO user_clovers (user_id, clovers) 
-        VALUES (?, ?) 
-        ON CONFLICT(user_id) DO UPDATE SET clovers = clovers + ?
-    """, (user_id, amount, amount))
+    cursor.execute("INSERT INTO subject_freq (user_id, subject, count) VALUES (?, ?, 1) ON CONFLICT(user_id, subject) DO UPDATE SET count = count + 1", (user_id, subject))
     conn.commit()
     conn.close()
 
-def add_study_time(user_id, seconds, subject=None):
+def get_sorted_subjects(user_id):
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO user_study (user_id, total_time) 
-        VALUES (?, ?) 
-        ON CONFLICT(user_id) DO UPDATE SET total_time = total_time + ?
-    """, (user_id, seconds, seconds))
-    
+    cursor.execute("SELECT subject FROM subject_freq WHERE user_id = ? ORDER BY count DESC", (user_id,))
+    frequent = [row[0] for row in cursor.fetchall()]
+    conn.close()
+
+    sorted_list = []
+    for sub in frequent:
+        if sub not in sorted_list:
+            sorted_list.append(sub)
+    for sub in DEFAULT_SUBJECTS:
+        if sub not in sorted_list:
+            sorted_list.append(sub)
+    return sorted_list
+
+def add_study_time(user_id, subject, seconds):
+    today = datetime.now().strftime("%d/%m/%Y")
+    conn = sqlite3.connect("study_data.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO daily_study (user_id, date, subject, duration) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, date, subject) DO UPDATE SET duration = duration + ?", (user_id, today, subject, seconds, seconds))
+    cursor.execute("INSERT INTO user_study (user_id, total_time) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET total_time = total_time + ?", (user_id, seconds, seconds))
     if subject:
-        cursor.execute("""
-            INSERT INTO subject_study (user_id, subject, duration) 
-            VALUES (?, ?, ?) 
-            ON CONFLICT(user_id, subject) DO UPDATE SET duration = duration + ?
-        """, (user_id, subject, seconds, seconds))
-        
+        cursor.execute("INSERT INTO subject_study (user_id, subject, duration) VALUES (?, ?, ?) ON CONFLICT(user_id, subject) DO UPDATE SET duration = duration + ?", (user_id, subject, seconds, seconds))
     conn.commit()
     conn.close()
 
-def add_warning(user_id, amount=1):
+def add_item_to_inventory(user_id, item_name, amount=1):
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO user_penalties (user_id, warnings) 
-        VALUES (?, ?) 
-        ON CONFLICT(user_id) DO UPDATE SET warnings = warnings + ?
-    """, (user_id, amount, amount))
+    cursor.execute("INSERT INTO user_inventory (user_id, item_name, amount) VALUES (?, ?, ?) ON CONFLICT(user_id, item_name) DO UPDATE SET amount = amount + ?", (user_id, item_name, amount, amount))
     conn.commit()
     conn.close()
 
-def get_warnings(user_id):
-    conn = sqlite3.connect("study_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT warnings FROM user_penalties WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 0
+# --- MODAL & MENU CHỌN MÔN HỌC ---
+class CustomSubjectModal(Modal, title="✍️ Nhập Môn Học Mới"):
+    custom_sub = TextInput(label="Tên môn học của bạn:", placeholder="Ví dụ: Triết học, Giải tích...", min_length=1, max_length=50)
 
-# --- SỰ KIỆN KHI BOT ONLINE ---
-@bot.event
-async def on_ready():
-    print(f"🎉 Bot {bot.user.name} đã sẵn sàng hoạt động cùng Ong! ( •̀ ω •́ )✧")
+    async def on_submit(self, interaction: discord.Interaction):
+        chosen = self.custom_sub.value.strip()
+        user_subject_study[interaction.user.id] = {"subject": chosen, "start_time": time.time()}
+        record_subject_choice(interaction.user.id, chosen)
+        await interaction.response.send_message(f"🎯 Đã chọn môn: **{chosen}**. Cùng tập trung học nào! 🌸✨ (๑•̀ㅂ•́)و✧", ephemeral=True)
 
-# --- 1. TÍNH NĂNG JOIN-TO-CREATE & THEO DÕI BẬT CAM PHÒNG VOICE ---
+class SubjectSelect(Select):
+    def __init__(self, user_id):
+        sorted_subjects = get_sorted_subjects(user_id)
+        options = []
+        for idx, sub in enumerate(sorted_subjects[:23]):
+            prefix = "⭐ " if idx < 3 and sub != "Tự do" else "📚 "
+            if sub == "Tự do": prefix = "🎨 "
+            options.append(discord.SelectOption(label=sub, value=sub, emoji=prefix.strip()))
+        options.append(discord.SelectOption(label="➕ Tự thêm môn khác...", value="CUSTOM_SUBJECT", emoji="✍️"))
+        super().__init__(placeholder="👉 Bấm vào đây để chọn môn học của bạn...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        chosen = self.values[0]
+        if chosen == "CUSTOM_SUBJECT":
+            await interaction.response.send_modal(CustomSubjectModal())
+        else:
+            user_subject_study[interaction.user.id] = {"subject": chosen, "start_time": time.time()}
+            record_subject_choice(interaction.user.id, chosen)
+            await interaction.response.send_message(f"✅ Đã lưu môn học: **{chosen}**! Chúc bạn học tốt nhé! ⏱️🔥 ( •̀ ω •́ )✧", ephemeral=True)
+
+class SubjectSelectView(View):
+    def __init__(self, user_id, timeout=120):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+        self.add_item(SubjectSelect(user_id))
+
+# --- ⏱️ THEO DÕI CAMERA & TÍNH THỜI GIAN ---
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # Kênh Voice "➕ Tạo Phòng Học"
     if after.channel and "Tạo Phòng Học" in after.channel.name:
         guild = member.guild
         category = after.channel.category
-        new_channel = await guild.create_voice_channel(
-            name=f"🌸 Phòng Học Của {member.display_name}",
-            category=category
-        )
+        new_channel = await guild.create_voice_channel(name=f"🌸 Phòng Học Của {member.display_name}", category=category)
         await member.move_to(new_channel)
 
-    # Tính thời gian cày giờ khi tham gia/rời phòng voice
-    if not before.channel and after.channel:
-        user_voice_start[member.id] = time.time()
-    elif before.channel and not after.channel:
-        if member.id in user_voice_start:
-            start_time = user_voice_start.pop(member.id)
-            duration = int(time.time() - start_time)
-            add_study_time(member.id, duration)
+    if not before.self_video and after.self_video and after.channel:
+        user_cam_start[member.id] = time.time()
+        user_subject_study[member.id] = {"subject": "Tự do", "start_time": time.time()}
+        
+        embed = discord.Embed(
+            title="🎉 CHÀO MỪNG BẠN ĐÃ BẬT CAM HỌC TẬP! 🎉",
+            description=f"Chào mừng {member.mention} đã bật camera học cùng mọi người nha! 🌸✨\n\n👉 **Hãy chọn môn học bên dưới nhé:**",
+            color=discord.Color.green()
+        )
+        view = SubjectSelectView(member.id)
+        try:
+            await after.channel.send(content=f"{member.mention}", embed=embed, view=view, delete_after=120)
+        except Exception:
+            pass
+
+    elif (before.self_video and not after.self_video) or (before.channel and not after.channel and member.id in user_cam_start):
+        if member.id in user_cam_start:
+            start_t = user_cam_start.pop(member.id)
+            duration = int(time.time() - start_t)
             
-            # Tích lũy Cỏ 4 Lá (Mỗi 30 phút cày giờ tặng 5 Cỏ 4 Lá)
+            hours = duration // 3600
+            minutes = (duration % 3600) // 60
+            seconds = duration % 60
+
+            subject_info = user_subject_study.get(member.id, {"subject": "Tự do"})
+            subject_name = subject_info["subject"]
+            
+            add_study_time(member.id, subject_name, duration)
             earned_clovers = (duration // 1800) * 5
             if earned_clovers > 0:
                 add_clovers(member.id, earned_clovers)
-                
-            # Xóa phòng tự tạo nếu không còn ai trong phòng
-            if len(before.channel.members) == 0 and before.channel.name.startswith("🌸 Phòng Học Của"):
-                await before.channel.delete()
 
-# --- 2. XỬ LÝ CẢM XÚC TỰ ĐỘNG CHO KÊNH GÓP Ý ---
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
+            chan = before.channel or after.channel
+            if chan:
+                time_str = f"{hours} giờ " if hours > 0 else ""
+                time_str += f"{minutes} phút " if minutes > 0 or hours > 0 else ""
+                time_str += f"{seconds} giây"
 
-    # Tự động thả cảm xúc ở kênh "góp-ý-xây-dựng"
-    if message.channel.name == "góp-ý-xây-dựng":
-        await message.add_reaction("👍")
-        await message.add_reaction("👎")
-        await message.add_reaction("❤️")
+                msg = (
+                    f"👋 Tạm biệt {member.mention}! Cảm ơn bạn đã nỗ lực học tập cùng mọi người nhé. "
+                    f"**Chúc bạn một ngày vui vẻ và tràn đầy năng lượng!** 🌸✨ ( ˘ ³˘)♥\n\n"
+                    f"📚 **Môn học:** {subject_name}\n"
+                    f"⏱️ **Tổng thời gian bạn đã học:** **{time_str}**"
+                )
+                if earned_clovers > 0:
+                    msg += f"\n🍀 **Phần thưởng tích lũy:** +{earned_clovers} Cỏ 4 Lá!"
+                await chan.send(msg)
 
-    await bot.process_commands(message)
+    if before.channel and len(before.channel.members) == 0 and before.channel.name.startswith("🌸 Phòng Học Của"):
+        await before.channel.delete()
 
-# --- 3. 🎁 HỆ THỐNG CÂU LỆNH THƯỞNG (DÀNH CHO BQL / ONGBEE) ---
+# --- 📊 HỆ THỐNG BÁO CÁO HỌC TẬP LINH HOẠT ---
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def thuong(ctx, member: discord.Member, so_co: int, *, ly_do: str = "Tuyên dương thành tích học tập"):
-    """Lệnh thưởng Cỏ 4 Lá cho thành viên (Chỉ Admin/BQL dùng được)"""
-    add_clovers(member.id, so_co)
-    
-    # Gửi thông báo đến kênh "bảng-vinh-danh" nếu có
-    vinh_danh_chan = discord.utils.get(ctx.guild.text_channels, name="bảng-vinh-danh")
-    embed = discord.Embed(
-        title="🎉 THƯỞNG CỎ 4 LÁ TUYÊN DƯƠNG 🎉",
-        description=f"Chúc mừng {member.mention} đã nhận được **+{so_co} Cỏ 4 Lá 🍀**!\n**Lý do:** {ly_do} 🌸✨ ( •̀ ω •́ )✧",
-        color=discord.Color.green()
-    )
-    
-    if vinh_danh_chan:
-        await vinh_danh_chan.send(embed=embed)
-    await ctx.send(f"✅ Đã thưởng **{so_co} Cỏ 4 Lá 🍀** cho {member.mention} thành công!")
-
-# --- 4. ⚖️ HỆ THỐNG CÂU LỆNH KỶ LUẬT & XỬ PHẠT (DÀNH CHO BQL / ONGBEE) ---
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def phat(ctx, member: discord.Member, tru_co: int, *, ly_do: str = "Vi phạm kỷ luật học tập"):
-    """Lệnh phạt trừ Cỏ + tính 1 lần cảnh báo (Chỉ Admin/BQL dùng được)"""
-    add_clovers(member.id, -tru_co)
-    add_warning(member.id, 1)
-    tong_warn = get_warnings(member.id)
-    
-    # Gửi thông báo đến kênh "kênh-kỷ-luật" hoặc "sổ-lỗi-sai"
-    ky_luat_chan = discord.utils.get(ctx.guild.text_channels, name="kênh-kỷ-luật")
-    embed = discord.Embed(
-        title="⚠️ THÔNG BÁO XỬ PHẠT KỶ LUẬT ⚠️",
-        description=f"Thành viên {member.mention} đã bị xử phạt!\n"
-                    f"• **Trừ:** {tru_co} Cỏ 4 Lá 🍀\n"
-                    f"• **Số lần vi phạm:** {tong_warn} lần 🚨\n"
-                    f"• **Lý do:** {ly_do}\n\n"
-                    f"*Hãy chép lại lỗi sai vào kênh `sổ-lỗi-sai` để rút kinh nghiệm nhé!* (ง'̀-'́)ง",
-        color=discord.Color.red()
-    )
-    
-    if ky_luat_chan:
-        await ky_luat_chan.send(embed=embed)
-    await ctx.send(f"🚨 Đã xử phạt {member.mention} (Trừ {tru_co} Cỏ 🍀, +1 Vi phạm).")
-
-# --- 5. ⏱️ LỆNH BẮT ĐẦU VÀ KẾT THÚC HỌC THEO MÔN CỤ THỂ ---
-@bot.command()
-async def hoctap(ctx, *, ten_mon: str):
-    """Bắt đầu tính giờ học cho một môn cụ thể (Ví dụ: !hoctap Toán)"""
+async def baocao(ctx, mode: str = "ngay", *, target: str = None):
+    """
+    Cú pháp:
+    !baocao ngay -> Xem báo cáo tổng hợp hôm nay
+    !baocao tuan -> Xem báo cáo tổng hợp tuần này
+    !baocao thang -> Xem báo cáo tổng hợp tháng này
+    !baocao nam -> Xem báo cáo tổng hợp năm nay
+    !baocao mon <Tên môn> -> Xem tổng thời gian của môn đó
+    !baocao ngay_mon <Tên môn> -> Xem chi tiết môn theo ngày
+    """
     user_id = ctx.author.id
-    if user_id in user_subject_study:
-        current_mon = user_subject_study[user_id]["subject"]
-        await ctx.send(f"⚠️ {ctx.author.mention} đang trong phiên học môn **{current_mon}** rồi nha! Hãy gõ `!dung_hoc` trước khi sang môn mới nè! ( •̀ ω •́ )✧")
-        return
-
-    user_subject_study[user_id] = {
-        "subject": ten_mon,
-        "start_time": time.time()
-    }
-    await ctx.send(f"📚 {ctx.author.mention} đã bắt đầu phiên học môn **{ten_mon}**! Chúc Ong học tập thật tốt nha! 🌸✨ (๑•̀ㅂ•́)و✧")
-
-@bot.command()
-async def dung_hoc(ctx):
-    """Dừng phiên học môn hiện tại và lưu kết quả"""
-    user_id = ctx.author.id
-    if user_id not in user_subject_study:
-        await ctx.send(f"❌ {ctx.author.mention} chưa bấm bắt đầu học môn nào cả! Gõ `!hoctap <Tên_Môn>` để bắt đầu nha!")
-        return
-
-    study_data = user_subject_study.pop(user_id)
-    ten_mon = study_data["subject"]
-    duration = int(time.time() - study_data["start_time"])
-    minutes = round(duration / 60, 1)
-
-    add_study_time(user_id, duration, subject=ten_mon)
-    
-    earned_clovers = (duration // 1800) * 5
-    if earned_clovers > 0:
-        add_clovers(user_id, earned_clovers)
-
-    await ctx.send(f"🎉 **HOÀN THÀNH PHIÊN HỌC!** {ctx.author.mention} đã học xong môn **{ten_mon}** trong **{minutes} phút**! Tích lũy thêm **+{earned_clovers} Cỏ 4 Lá 🍀**! 🌸✨ (⁠≧⁠▽⁠≧⁠)")
-
-# --- 6. 📊 LỆNH BÁO CÁO TỔNG HỢP, MÔN HỌC & KỶ LUẬT ---
-@bot.command()
-async def baocao(ctx):
-    """Xem báo cáo tổng hợp kết quả học tập và tình trạng kỷ luật cá nhân"""
-    user_id = ctx.author.id
-    clovers = get_clovers(user_id)
-    warnings = get_warnings(user_id)
-    
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT total_time FROM user_study WHERE user_id = ?", (user_id,))
+
+    today_str = datetime.now().strftime("%d/%m/%Y")
+    current_month = datetime.now().strftime("/%m/%Y")
+    current_year = datetime.now().strftime("%Y")
+
+    embed = discord.Embed(title=f"📊 BÁO CÁO HỌC TẬP CỦA {ctx.author.display_name.upper()}", color=discord.Color.teal())
+
+    if mode == "ngay":
+        cursor.execute("SELECT subject, duration FROM daily_study WHERE user_id = ? AND date = ?", (user_id, today_str))
+        rows = cursor.fetchall()
+        total_sec = sum(r[1] for r in rows)
+        h, m, s = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
+        desc = f"📅 **Ngày:** {today_str}\n⏱️ **Tổng thời gian:** {h}h {m}m {s}s\n\n"
+        for sub, dur in rows:
+            sh, sm = dur // 3600, (dur % 3600) // 60
+            desc += f"• **{sub}**: {sh}h {sm}m\n"
+        embed.description = desc
+
+    elif mode == "tuan":
+        # Lấy dữ liệu 7 ngày gần nhất
+        cursor.execute("SELECT date, subject, duration FROM daily_study WHERE user_id = ? ORDER BY rowid DESC LIMIT 30", (user_id,))
+        rows = cursor.fetchall()
+        total_sec = sum(r[2] for r in rows)
+        h, m, _ = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
+        embed.description = f"📅 **Báo cáo Tuần (7 ngày gần nhất)**\n⏱️ **Tổng thời gian:** {h}h {m}m\n\n"
+        sub_dict = {}
+        for _, sub, dur in rows:
+            sub_dict[sub] = sub_dict.get(sub, 0) + dur
+        for sub, dur in sub_dict.items():
+            sh, sm = dur // 3600, (dur % 3600) // 60
+            embed.add_field(name=sub, value=f"{sh}h {sm}m", inline=True)
+
+    elif mode == "thang":
+        cursor.execute("SELECT subject, duration FROM daily_study WHERE user_id = ? AND date LIKE ?", (user_id, f"%{current_month}%"))
+        rows = cursor.fetchall()
+        total_sec = sum(r[1] for r in rows)
+        h, m, _ = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
+        embed.description = f"📅 **Tháng:** {datetime.now().strftime('%m/%Y')}\n⏱️ **Tổng thời gian:** {h}h {m}m\n\n"
+        sub_dict = {}
+        for sub, dur in rows:
+            sub_dict[sub] = sub_dict.get(sub, 0) + dur
+        for sub, dur in sub_dict.items():
+            sh, sm = dur // 3600, (dur % 3600) // 60
+            embed.add_field(name=sub, value=f"{sh}h {sm}m", inline=True)
+
+    elif mode == "nam":
+        cursor.execute("SELECT subject, duration FROM daily_study WHERE user_id = ? AND date LIKE ?", (user_id, f"%{current_year}"))
+        rows = cursor.fetchall()
+        total_sec = sum(r[1] for r in rows)
+        h, m, _ = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
+        embed.description = f"📅 **Năm:** {current_year}\n⏱️ **Tổng thời gian:** {h}h {m}m\n\n"
+        sub_dict = {}
+        for sub, dur in rows:
+            sub_dict[sub] = sub_dict.get(sub, 0) + dur
+        for sub, dur in sub_dict.items():
+            sh, sm = dur // 3600, (dur % 3600) // 60
+            embed.add_field(name=sub, value=f"{sh}h {sm}m", inline=True)
+
+    elif mode == "mon" and target:
+        cursor.execute("SELECT duration FROM subject_study WHERE user_id = ? AND subject = ?", (user_id, target))
+        row = cursor.fetchone()
+        total_sec = row[0] if row else 0
+        h, m, s = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
+        embed.description = f"📚 **Môn học:** {target}\n⏱️ **Tổng tích lũy từ trước đến nay:** {h}h {m}m {s}s"
+
+    else:
+        # Mặc định tổng quan toàn bộ
+        cursor.execute("SELECT total_time FROM user_study WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        total_sec = row[0] if row else 0
+        clovers = get_clovers(user_id)
+        h, m, s = total_sec // 3600, (total_sec % 3600) // 60, total_sec % 60
+        embed.description = f"🍀 **Cỏ 4 Lá hiện có:** {clovers}\n⏱️ **Tổng thời gian học toàn bộ:** {h}h {m}m {s}s\n\n💡 *Gợi ý cú pháp:* `!baocao ngay`, `!baocao tuan`, `!baocao thang`, `!baocao nam`, hoặc `!baocao mon <Tên môn>`"
+
+    conn.close()
+    await ctx.send(embed=embed)
+
+# --- 📝 HỆ THỐNG TRẮC NGHIỆM HẰNG NGÀY ---
+@bot.command()
+async def tracnghiem(ctx):
+    user_id = ctx.author.id
+    today = datetime.now().strftime("%d/%m/%Y")
+
+    conn = sqlite3.connect("study_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT attempts FROM quiz_limits WHERE user_id = ? AND date = ?", (user_id, today))
     row = cursor.fetchone()
-    total_seconds = row[0] if row else 0
-    total_hours = round(total_seconds / 3600, 1)
+    attempts = row[0] if row else 0
+
+    if attempts >= 3:
+        await ctx.send(f"⚠️ {ctx.author.mention} ơi, hôm nay bạn đã hoàn thành tối đa 3 lượt trắc nghiệm rồi! Hãy nghỉ ngơi hoặc ôn tập thêm nhé! 🌸 (｡•́‿•̀｡)")
+        conn.close()
+        return
+
+    # Ngân hàng câu hỏi trắc nghiệm mẫu
+    questions = [
+        {"q": "Đâu là một môn khoa học tự nhiên?", "options": ["A. Vật Lý", "B. Ngữ Văn", "C. Lịch Sử", "D. Địa Lý"], "answer": "A"},
+        {"q": "Thủ đô của Việt Nam là gì?", "options": ["A. TP. Hồ Chí Minh", "B. Hà Nội", "C. Đà Nẵng", "D. Hải Phòng"], "answer": "B"},
+        {"q": "Công thức tính diện tích hình chữ nhật là gì?", "options": ["A. Dài + Rộng * 2", "B. Dài * Rộng", "C. Cạnh nhân bốn", "D. Đáy nhân cao chia hai"], "answer": "B"},
+        {"q": "Trong tiếng Anh, từ nào có nghĩa là 'Quả táo'?", "options": ["A. Banana", "B. Orange", "C. Apple", "D. Grape"], "answer": "C"}
+    ]
+
+    q_data = random.choice(questions)
     
-    cursor.execute("SELECT subject, duration FROM subject_study WHERE user_id = ?", (user_id,))
-    subject_rows = cursor.fetchall()
-    
-    cursor.execute("SELECT streak_days FROM user_streaks WHERE user_id = ?", (user_id,))
-    streak_row = cursor.fetchone()
-    streak_days = streak_row[0] if streak_row else 0
+    cursor.execute("INSERT INTO quiz_limits (user_id, date, attempts) VALUES (?, ?, 1) ON CONFLICT(user_id, date) DO UPDATE SET attempts = attempts + 1", (user_id, today))
+    conn.commit()
     conn.close()
 
     embed = discord.Embed(
-        title=f"📊 BÁO CÁO HỌC TẬP CỦA {ctx.author.display_name.upper()} 📊",
-        description=f"Dưới đây là kết quả hành trình rèn luyện kỷ luật của bạn nè! 🌸✨",
-        color=discord.Color.teal()
+        title="🧠 TRẮC NGHIỆM HẰNG NGÀY 📚",
+        description=f"**Câu hỏi:** {q_data['q']}\n\n" + "\n".join(q_data['options']) + f"\n\n👉 *Hãy gõ chữ cái đáp án của bạn (A, B, C hoặc D) trong vòng 30 giây nhé!* ( •̀ ω •́ )✧",
+        color=discord.Color.purple()
     )
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
-    embed.add_field(name="⏱️ Tổng Giờ Học", value=f"**{total_hours} Giờ**", inline=True)
-    embed.add_field(name="🔥 Chuỗi Streak", value=f"**{streak_days} Ngày**", inline=True)
-    embed.add_field(name="🍀 Ví Cỏ 4 Lá", value=f"**{clovers} Cỏ**", inline=True)
-    embed.add_field(name="🚨 Cảnh Báo Lỗi", value=f"**{warnings} Lần**", inline=True)
-
-    if subject_rows:
-        subject_text = ""
-        for sub, dur in subject_rows:
-            sub_hours = round(dur / 3600, 1)
-            subject_text += f"• **{sub}:** {sub_hours} giờ ({dur // 60} phút)\n"
-        embed.add_field(name="📚 Chi Tiết Theo Môn Học", value=subject_text, inline=False)
-    else:
-        embed.add_field(name="📚 Chi Tiết Theo Môn Học", value="*Chưa có dữ liệu học theo môn cụ thể.*", inline=False)
-
-    embed.set_footer(text="Cố gắng duy trì thói quen cày giờ mỗi ngày nha Ong! 🐝💛")
     await ctx.send(embed=embed)
 
-# --- 7. 🛍️ SHOP ĐỔI QUÀ CỎ 4 LÁ ---
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content.upper() in ["A", "B", "C", "D"]
+
+    try:
+        msg = await bot.wait_for('message', timeout=30.0, check=check)
+        user_ans = msg.content.upper()
+        if user_ans == q_data['answer']:
+            add_clovers(user_id, 10)
+            await ctx.send(f"🎉 Chính xác tuyệt vời! Chúc mừng {ctx.author.mention} nhận được **+10 Cỏ 4 Lá 🍀**! (๑•̀ㅂ•́)و✧")
+        else:
+            await ctx.send(f"❌ Tiếc quá, đáp án đúng phải là **{q_data['answer']}** cơ. Lần sau cố gắng hơn nha Ong! 💪🌸")
+    except asyncio.TimeoutError:
+        await ctx.send(f"⏰ Hết giờ mất rồi {ctx.author.mention} ơi! Lần sau nhanh tay hơn nhé! (｡•́︿•̀｡)")
+
+# --- 🛒 CỬA HÀNG (SHOP) & ĐỔI QUÀ ---
 @bot.command()
 async def shop(ctx):
-    """Xem danh sách phần thưởng học tập trong Shop Cỏ 4 Lá"""
-    embed = discord.Embed(
-        title="🛍️ SHOP ĐỔI QUÀ CỎ 4 LÁ 🍀",
-        description="Học tập chăm chỉ, tích Cỏ 4 Lá để đổi các phần thưởng học tập cốt lõi nha! 🌸✨ (๑•̀ㅂ•́)و✧",
-        color=discord.Color.gold()
-    )
-    embed.add_field(name="`1` ❄️ Thẻ Đóng Băng Chuỗi", value="Giá: **30 Cỏ 4 Lá 🍀**\n*Giữ chuỗi Streak khi bận không học được.*", inline=False)
-    embed.add_field(name="`2` 👑 Voucher Gỡ Cảnh Báo", value="Giá: **120 Cỏ 4 Lá 🍀**\n*Xóa 1 lần vi phạm kỷ luật nhẹ.*", inline=False)
-    embed.add_field(name="`3` 🎁 Hộp Quà May Mắn", value="Giá: **35 Cỏ 4 Lá 🍀**\n*Mở ngẫu nhiên nhận 10-80 Cỏ hoặc 1 Thẻ Đóng Băng ❄️.*", inline=False)
-    embed.add_field(name="`4` 🍯 Hũ Mật Chăm Chỉ (x2 Cỏ 3 Ngày)", value="Giá: **60 Cỏ 4 Lá 🍀**\n*Nhân đôi Cỏ 4 Lá nhận được khi làm trắc nghiệm.*", inline=False)
-    embed.set_footer(text="Gõ !doiqua <Mã_Quà> để tiến hành đổi quà nha! (Ví dụ: !doiqua 3)")
+    embed = discord.Embed(title="🛒 CỬA HÀNG CỎ 4 LÁ 🍀", description="Dùng Cỏ 4 Lá kiếm được để đổi các phần quà đặc biệt nhé! Gõ `!mua <mã_item>` để mua.", color=discord.Color.gold())
+    for code, item in SHOP_ITEMS.items():
+        embed.add_field(name=f"[{code}] {item['name']} - 🍀 {item['price']} Cỏ", value=item['desc'], inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
-async def doiqua(ctx, ma_qua: int):
-    """Đổi Cỏ 4 Lá lấy phần thưởng cốt lõi trong Shop"""
-    prices = {1: 30, 2: 120, 3: 35, 4: 60}
-    names = {
-        1: "❄️ Thẻ Đóng Băng Chuỗi",
-        2: "👑 Voucher Gỡ Cảnh Báo",
-        3: "🎁 Hộp Quà May Mắn",
-        4: "🍯 Hũ Mật Chăm Chỉ"
-    }
+async def mua(ctx, code: str):
+    user_id = ctx.author.id
+    if code not in SHOP_ITEMS:
+        await ctx.send("⚠️ Mã món hàng không tồn tại! Gõ `!shop` để xem danh sách.")
+        return
+    
+    item = SHOP_ITEMS[code]
+    price = item['price']
+    current_clovers = get_clovers(user_id)
 
-    if ma_qua not in prices:
-        await ctx.send("❌ Mã quà không hợp lệ! Gõ `!shop` để xem lại bảng mã quà nha!")
+    if current_clovers < price:
+        await ctx.send(f"❌ Bạn không đủ Cỏ 4 Lá! Bạn đang có {current_clovers} 🍀 nhưng món này cần tới {price} 🍀.")
         return
 
-    cost = prices[ma_qua]
-    current = get_clovers(ctx.author.id)
+    add_clovers(user_id, -price)
+    add_item_to_inventory(user_id, item['name'], 1)
+    await ctx.send(f"🎉 Chúc mừng {ctx.author.mention} đã mua thành công **{item['name']}**! Đã trừ -{price} 🍀. Kiểm tra kho đồ bằng lệnh `!tuido` nhé! (๑•̀ㅂ•́)و✧")
 
-    if current < cost:
-        await ctx.send(f"🥺 {ctx.author.mention} chưa đủ Cỏ 4 Lá rồi! Cần **{cost} 🍀** nhưng bạn chỉ có **{current} 🍀** thôi.")
-        return
+@bot.command(name="tuido")
+async def tuido(ctx):
+    user_id = ctx.author.id
+    conn = sqlite3.connect("study_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT item_name, amount FROM user_inventory WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
 
-    add_clovers(ctx.author.id, -cost)
+    embed = discord.Embed(title=f"🎒 TÚI ĐỒ CỦA {ctx.author.display_name}", color=discord.Color.blurple())
+    if rows:
+        desc = ""
+        for name, amt in rows:
+            desc += f"• **{name}**: x{amt}\n"
+        embed.description = desc
+    else:
+        embed.description = "Túi đồ của bạn đang trống! Hãy chăm chỉ học tập kiếm Cỏ để mua sắm nhé! 🌸"
+    await ctx.send(embed=embed)
 
-    if ma_qua == 1:
-        conn = sqlite3.connect("study_data.db")
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO user_streaks (user_id, freeze_cards) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET freeze_cards = freeze_cards + 1", (ctx.author.id,))
-        conn.commit()
-        conn.close()
-        await ctx.send(f"🎉 **ĐỔI QUÀ THÀNH CÔNG!** {ctx.author.mention} đã nhận **1 Thẻ Đóng Băng Chuỗi ❄️**! ( •̀ ω •́ )✧")
+# --- 🛠️ LỆNH REFRESH / TẠO SERVER & KỶ LUẬT ---
+@bot.command()
+async def setup_server(ctx):
+    if not is_bql(ctx): return
+    guild = ctx.guild
+    
+    role_ky_luat = discord.utils.get(guild.roles, name="🚨 Vi Phạm Kỷ Luật")
+    if not role_ky_luat:
+        await guild.create_role(name="🚨 Vi Phạm Kỷ Luật", color=discord.Color.dark_gray())
 
-    elif ma_qua == 2:
-        # Xóa 1 vi phạm nếu có
-        curr_warn = get_warnings(ctx.author.id)
-        if curr_warn > 0:
-            add_warning(ctx.author.id, -1)
-        bql_chan = discord.utils.get(ctx.guild.text_channels, name="kênh-xét-duyệt-bql")
-        if bql_chan:
-            await bql_chan.send(f"🛍️ **YÊU CẦU ĐỔI QUÀ:** {ctx.author.mention} đã dùng Cỏ 4 Lá đổi: **Voucher Gỡ Cảnh Báo**! Đã giảm 1 lần vi phạm cho bạn ấy! 🌸✨")
-        await ctx.send(f"🎉 **ĐỔI QUÀ THÀNH CÔNG!** {ctx.author.mention} đã dùng Voucher gỡ 1 lần cảnh báo! 🌸☘️ (⁠≧⁠▽⁠≧⁠)")
+    category = discord.utils.get(guild.categories, name="🌸 KHU VỰC HỌC TẬP")
+    if not category:
+        category = await guild.create_category("🌸 KHU VỰC HỌC TẬP")
 
-    elif ma_qua == 4:
-        bql_chan = discord.utils.get(ctx.guild.text_channels, name="kênh-xét-duyệt-bql")
-        if bql_chan:
-            await bql_chan.send(f"🛍️ **YÊU CẦU ĐỔI QUÀ:** {ctx.author.mention} đã dùng Cỏ 4 Lá đổi: **{names[ma_qua]}**! BQL vui lòng kích hoạt x2 Cỏ cho bạn ấy nhé! 🌸✨")
-        await ctx.send(f"🎉 **ĐỔI QUÀ THÀNH CÔNG!** {ctx.author.mention} đã đổi món **{names[ma_qua]}**! 🌸☘️ (⁠≧⁠▽⁠≧⁠)")
+    channels_to_create = [
+        ("🌸·tạo-phòng-học", "voice"),
+        ("⚠️·kênh-kỷ-luật", "text")
+    ]
 
-    elif ma_qua == 3:
-        luck = random.choice(["clovers", "freeze"])
-        if luck == "clovers":
-            bonus = random.randint(10, 80)
-            add_clovers(ctx.author.id, bonus)
-            await ctx.send(f"🎁 **HỘP QUÀ MAY MẮN!** {ctx.author.mention} đã trúng thưởng **+{bonus} Cỏ 4 Lá 🍀**! 🌸✨ (⁠≧⁠▽⁠≧⁠)")
-        else:
-            conn = sqlite3.connect("study_data.db")
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO user_streaks (user_id, freeze_cards) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET freeze_cards = freeze_cards + 1", (ctx.author.id,))
-            conn.commit()
-            conn.close()
-            await ctx.send(f"🎁 **HỘP QUÀ MAY MẮN!** {ctx.author.mention} trúng ngay **1 Thẻ Đóng Băng Chuỗi ❄️**! 🌿💖 ( •̀ ω •́ )✧")
+    for name, c_type in channels_to_create:
+        existing = discord.utils.get(guild.channels, name=name)
+        if not existing:
+            if c_type == "voice":
+                await guild.create_voice_channel(name, category=category)
+            else:
+                chan = await guild.create_text_channel(name, category=category)
+                role = discord.utils.get(guild.roles, name="🚨 Vi Phạm Kỷ Luật")
+                if role:
+                    await chan.set_permissions(role, read_messages=True, send_messages=True)
+                    await chan.set_permissions(guild.default_role, read_messages=False)
 
-# --- 8. ❓ GÓC TRẮC NGHIỆM TỰ ĐỘNG ---
-class QuizView(discord.ui.View):
-    def __init__(self, correct_option, user_id):
-        super().__init__(timeout=60)
-        self.correct_option = correct_option
-        self.user_id = user_id
-
-    async def check_answer(self, interaction: discord.Interaction, option: str):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ Đây không phải lượt trả lời của bạn!", ephemeral=True)
-            return
-
-        if option == self.correct_option:
-            add_clovers(interaction.user.id, 10)
-            await interaction.response.send_message("🎉 **ĐÚNG RỒI!** Bạn nhận được **+10 Cỏ 4 Lá 🍀**! ( •̀ ω •́ )✧")
-        else:
-            await interaction.response.send_message("🥺 Rất tiếc, câu trả lời chưa đúng rồi! Cố gắng ở câu sau nhé! 💪", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="A", style=discord.ButtonStyle.primary)
-    async def button_a(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.check_answer(interaction, "A")
-
-    @discord.ui.button(label="B", style=discord.ButtonStyle.primary)
-    async def button_b(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.check_answer(interaction, "B")
-
-    @discord.ui.button(label="C", style=discord.ButtonStyle.primary)
-    async def button_c(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.check_answer(interaction, "C")
-
-    @discord.ui.button(label="D", style=discord.ButtonStyle.primary)
-    async def button_d(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.check_answer(interaction, "D")
+    await ctx.send("✅ Đã refresh và thiết lập cấu trúc server thành công! 🚀✨ ( •̀ ω •́ )✧")
 
 @bot.command()
-async def danganh(ctx):
-    """Đăng câu hỏi trắc nghiệm tương tác"""
+async def xem_phat(ctx):
+    conn = sqlite3.connect("study_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT level, clovers_deduct, description FROM dynamic_punishments")
+    rules = cursor.fetchall()
+    conn.close()
+
+    if not rules:
+        await ctx.send("📜 Hiện chưa có mức phạt nào!")
+        return
+
+    embed = discord.Embed(title="📜 BẢNG CÁC MỨC PHẠT VÀ KỶ LUẬT", color=discord.Color.dark_orange())
+    for lvl, clovers, desc in rules:
+        embed.add_field(name=f"🛑 Mức {lvl} (Trừ {clovers} Cỏ 🍀)", value=desc, inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def them_phat(ctx, muc_do: str, so_co_tru: int, *, noi_dung_phat: str):
+    if not is_bql(ctx): return
+    conn = sqlite3.connect("study_data.db")
+    cursor = conn.cursor()
+    cursor.execute("REPLACE INTO dynamic_punishments (level, clovers_deduct, description) VALUES (?, ?, ?)", (muc_do, so_co_tru, noi_dung_phat))
+    conn.commit()
+    conn.close()
+    await ctx.send(f"✅ Đã thêm/cập nhật thành công **Mức phạt {muc_do}** (Trừ {so_co_tru} Cỏ 🍀)! 🌸✨ ( •̀ ω •́ )✧")
+
+@bot.command()
+async def phat(ctx, member: discord.Member, muc_do: str, *, ly_do: str = "Vi phạm nội quy / AFK"):
+    if not is_bql(ctx): return
+
+    conn = sqlite3.connect("study_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT clovers_deduct, description FROM dynamic_punishments WHERE level = ?", (muc_do,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        await ctx.send("⚠️ Mức phạt này chưa tồn tại! Gõ `!xem_phat` để xem các mức có sẵn.")
+        return
+
+    clovers_deduct, hinh_phat = row
+    add_clovers(member.id, -clovers_deduct)
+
+    role_ky_luat = discord.utils.get(ctx.guild.roles, name="🚨 Vi Phạm Kỷ Luật")
+    if not role_ky_luat:
+        role_ky_luat = await ctx.guild.create_role(name="🚨 Vi Phạm Kỷ Luật", color=discord.Color.dark_gray())
+
+    await member.add_roles(role_ky_luat)
+
+    ky_luat_chan = discord.utils.get(ctx.guild.text_channels, name="⚠️·kênh-kỷ-luật")
     embed = discord.Embed(
-        title="❓ CÂU HỎI TRẮC NGHIỆM HẰNG NGÀY ❓",
-        description="Trả lời đúng câu hỏi dưới đây để nhận **10 Cỏ 4 Lá 🍀** nha!\n\n**Câu hỏi:** Đơn vị đo cường độ dòng điện trong hệ SI là gì?\n**A.** Volt (V)\n**B.** Ampere (A)\n**C.** Ohm (Ω)\n**D.** Watt (W)",
-        color=discord.Color.blue()
+        title="🛑 THÔNG BÁO CÁCH LY & XỬ PHẠT 🛑",
+        description=f"Thành viên {member.mention} đã vi phạm!\n\n📌 **Lý do:** {ly_do}\n📊 **Mức độ:** Mức {muc_do}\n💸 **Trừ:** -{clovers_deduct} Cỏ 4 Lá 🍀\n⚖️ **Hình phạt:**\n{hinh_phat}",
+        color=discord.Color.red()
     )
-    view = QuizView(correct_option="B", user_id=ctx.author.id)
-    await ctx.send(embed=embed, view=view)
 
-# --- 9. 🍀 LỆNH XEM SỐ CỎ 4 LÁ ---
+    if ky_luat_chan:
+        await ky_luat_chan.send(f"{member.mention}", embed=embed)
+    await ctx.send(f"🚨 Đã xử phạt {member.mention} thành công! 🎯")
+
 @bot.command()
-async def co(ctx):
-    """Xem số Cỏ 4 Lá hiện tại của bản thân"""
-    clovers = get_clovers(ctx.author.id)
-    await ctx.send(f"🍀 {ctx.author.mention} hiện đang có **{clovers} Cỏ 4 Lá** trong ví nha! (⁠≧⁠▽⁠≧⁠)")
+async def duyet(ctx, member: discord.Member, *, loi_nhan: str = "Đã hoàn thành tốt hình phạt!"):
+    if not is_bql(ctx): return
+    role_ky_luat = discord.utils.get(ctx.guild.roles, name="🚨 Vi Phạm Kỷ Luật")
+    if role_ky_luat in member.roles:
+        await member.remove_roles(role_ky_luat)
+        embed = discord.Embed(
+            title="🔓 DUYỆT HÌNH PHẠT THÀNH CÔNG",
+            description=f"Ban Quản Lý đã duyệt bài của {member.mention}!\n💬 **Lời nhắn:** {loi_nhan}\n\n🌸 *Bạn đã được gỡ kỷ luật!* ٩(ˊᗜˋ*)و",
+            color=discord.Color.green()
+        )
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"⚠️ Thành viên này hiện không bị dính kỷ luật nha Ong!")
 
 # --- RUN BOT ---
-keep_alive()
-
 TOKEN = os.environ.get("DISCORD_TOKEN")
-
 if TOKEN:
     bot.run(TOKEN)
-else:
-    print("❌ Lỗi: Chưa tìm thấy DISCORD_TOKEN trong phần cài đặt biến môi trường!")
