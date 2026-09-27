@@ -514,6 +514,40 @@ async def nhacnho(ctx, ngay: str, gio: str, *, noi_dung: str):
         
     except ValueError:
         await ctx.send(f"⚠️ {ctx.author.mention} ơi, định dạng ngày giờ chưa đúng! Hãy dùng chuẩn `YYYY-MM-DD HH:MM` (Ví dụ: `2026-09-08 20:30`) nha! 🌸")
+        @bot.command()
+async def xemnhacnho(ctx):
+    user_id = ctx.author.id
+    user_reminds = active_reminders.get(user_id, {})
+    
+    if not user_reminds:
+        await ctx.send(f"📭 {ctx.author.mention} ơi, hiện tại bạn không có lịch nhắc nhở nào đang chạy cả! (｡•́‿•̀｡)")
+        return
+        
+    embed = discord.Embed(title=f"⏰ DANH SÁCH NHẮC NHỞ CỦA {ctx.author.display_name.upper()}", color=discord.Color.blue())
+    desc = "Dùng lệnh `!tatnhacnho [ID]` để hủy nhắc nhở tương ứng nhé:\n\n"
+    for r_id, info in user_reminds.items():
+        time_str = info["time"].strftime("%Y-%m-%d %H:%M")
+        desc += f"🆔 **[ID: {r_id}]** — ⏱️ **{time_str}**: *{info['content']}*\n"
+        
+    embed.description = desc
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def tatnhacnho(ctx, reminder_id: int):
+    user_id = ctx.author.id
+    user_reminds = active_reminders.get(user_id, {})
+    
+    if reminder_id in user_reminds:
+        # Hủy tiến trình chạy ngầm
+        user_reminds[reminder_id]["task"].cancel()
+        del user_reminds[reminder_id]
+        await ctx.send(f"✅ Đã hủy thành công lịch nhắc nhở có **ID: {reminder_id}** theo yêu cầu của {ctx.author.mention}! 🌸 ( •̀ ω •́ )✧")
+    else:
+        await ctx.send(f"⚠️ Không tìm thấy lịch nhắc nhở nào có **ID: {reminder_id}** của bạn cả! Hãy gõ `!xemnhacnho` để kiểm tra lại ID nhé. 🐝")
+
+# --- BỘ NHỚ TẠM THỜI LƯU TRỮ NHẮC NHỞ CỦA NGƯỜI DÙNG ---
+# Cấu trúc: {user_id: {reminder_id: {"time": target_time, "content": noi_dung, "task": asyncio_task}}}
+active_reminders = {}
         
 # --- 🏆 2. BẢNG XẾP HẠNG HỌC TẬP (!top hoặc !xephang) ---
 @bot.command(aliases=["xephang"])
