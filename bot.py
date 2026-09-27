@@ -461,79 +461,71 @@ async def tuido(ctx):
     await ctx.send(embed=embed)
 # --- ⏰ 1. TÍNH NĂNG NHẮC NHỞ TỰ ĐỘNG (!nhacnho) ---
 @bot.command()
-async def nhacnho(ctx, thoi_gian: int, don_vi: str, *, noi_dung: str):
+async def nhacnho(ctx, ngay: str, gio: str, *, noi_dung: str):
     """
-    Cú pháp: !nhacnho <số> <phút/giây/giờ> <nội dung>
-    Ví dụ: !nhacnho 30 phút ôn bài môn Toán
+    Cú pháp: !nhacnho YYYY-MM-DD HH:MM Nội dung
+    Ví dụ: !nhacnho 2026-09-08 20:30 Ôn tập môn Toán
     """
-    seconds = 0
-    don_vi = don_vi.lower()
-    if "giây" in don_vi or don_vi.startswith("s"):
-        seconds = thoi_gian
-    elif "phút" in don_vi or don_vi.startswith("p"):
-        seconds = thoi_gian * 60
-    elif "giờ" in don_vi or don_vi.startswith("g") or don_vi.startswith("h"):
-        seconds = thoi_gian * 3600
-    else:
-        await ctx.send(f"⚠️ {ctx.author.mention} ơi, đơn vị thời gian chưa đúng! Hãy dùng `giây`, `phút` hoặc `giờ` nha! (｡•́‿•̀｡)")
-        return
+    import datetime
+    try:
+        target_time = datetime.datetime.strptime(f"{ngay} {gio}", "%Y-%m-%d %H:%M")
+        now = datetime.datetime.now()
 
-    if seconds > 86400: # Giới hạn tối đa 24 giờ
-        await ctx.send(f"⚠️ {ctx.author.mention} ơi, thời gian nhắc nhở tối đa chỉ trong vòng 24 giờ thôi nhé! 🌸")
-        return
+        if target_time <= now:
+            await ctx.send(f"⚠️ {ctx.author.mention} ơi, thời gian hẹn phải ở trong tương lai nha! (｡•́‿•̀｡)")
+            return
 
-    time_str = f"{thoi_gian} {don_vi}"
-    await ctx.send(f"⏳ Đã ghi nhận! Lumi sẽ nhắc {ctx.author.mention} về nội dung: *'{noi_dung}'* sau **{time_str}** nữa nha! ( •̀ ω •́ )✧")
+        seconds = (target_time - now).total_seconds()
+        await ctx.send(f"⏳ Đã cài lịch nhắc thành công cho {ctx.author.mention} vào lúc **{ngay} {gio}** với nội dung: *'{noi_dung}'*! ( •̀ ω •́ )✧")
 
-    await asyncio.sleep(seconds)
-    
-    embed_remind = discord.Embed(
-        title="⏰ TIN NHẮC NHỞ QUAN TRỌNG! ⏰",
-        description=f"Ey {ctx.author.mention} ơi! Đã hết **{time_str}** rồi nè!\n\n📌 **Nội dung:** {noi_dung}\n\n*Cố gắng hoàn thành thật tốt nha Ong!* 💪✨ (๑•̀ㅂ•́)و✧",
-        color=discord.Color.gold()
-    )
-    await ctx.send(content=f"{ctx.author.mention}", embed=embed_remind)
+        await asyncio.sleep(seconds)
 
+        embed_remind = discord.Embed(
+            title="⏰ BÁO THỨC / NHẮC NHỞ ĐÃ ĐẾN GIỜ! ⏰",
+            description=f"Ey {ctx.author.mention} ơi! Đã đến thời gian hẹn **{ngay} {gio}** rồi nè!\n\n📌 **Nội dung:** {noi_dung}\n\n*Hành động ngay thôi Ong ơi!* 💪🔥 (๑•̀ㅂ•́)و✧",
+            color=discord.Color.gold()
+        )
+        await ctx.send(content=f"{ctx.author.mention}", embed=embed_remind)
 
+    except ValueError:
+        await ctx.send(f"⚠️ {ctx.author.mention} ơi, định dạng ngày giờ chưa đúng! Hãy dùng chuẩn `YYYY-MM-DD HH:MM` (Ví dụ: `2026-09-08 20:30`) nha! 🌸")
+        
 # --- 🏆 2. BẢNG XẾP HẠNG HỌC TẬP (!top hoặc !xephang) ---
 @bot.command(aliases=["xephang"])
 async def top(ctx):
     conn = sqlite3.connect("study_data.db")
     cursor = conn.cursor()
-    
-    # Lấy top 10 người có nhiều Cỏ 4 Lá nhất
+
+    # Truy vấn lấy top thành viên tích lũy Cỏ 4 Lá và thời gian học cao nhất
     cursor.execute("SELECT user_id, clovers FROM user_clovers ORDER BY clovers DESC LIMIT 10")
     clover_rows = cursor.fetchall()
-    
-    # Lấy top 10 người có tổng thời gian học nhiều nhất
+
     cursor.execute("SELECT user_id, total_time FROM user_study ORDER BY total_time DESC LIMIT 10")
     time_rows = cursor.fetchall()
     conn.close()
 
-    embed = discord.Embed(title="🏆 BẢNG XẾP HẠNG THÀNH TÍCH (LEADERBOARD) 🍀", color=discord.Color.gold())
+    embed = discord.Embed(title="🏆 BẢNG XẾP HẠNG THÀNH TÍCH TOÀN SERVER 🍀", color=discord.Color.gold())
 
-    # Format bảng Cỏ 4 Lá
+    # Xử lý hiển thị bảng Cỏ 4 Lá
     clover_text = ""
     for idx, (uid, clovers) in enumerate(clover_rows, 1):
         medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"**{idx}.**"
         clover_text += f"{medal} <@{uid}> — **{clovers} 🍀**\n"
-    
     if not clover_text:
-        clover_text = "Chưa có dữ liệu xếp hạng Cỏ 4 Lá!"
+        clover_text = "Hiện chưa có dữ liệu tích lũy Cỏ 4 Lá trong hệ thống!"
     embed.add_field(name="✨ Top Cỏ 4 Lá Tích Lũy", value=clover_text, inline=False)
 
-    # Format bảng Thời gian học
+    # Xử lý hiển thị bảng Thời gian học tập
     time_text = ""
     for idx, (uid, total_sec) in enumerate(time_rows, 1):
         medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"**{idx}.**"
         h, m = total_sec // 3600, (total_sec % 3600) // 60
         time_text += f"{medal} <@{uid}> — **{h} giờ {m} phút** ⏱️\n"
-        
     if not time_text:
-        time_text = "Chưa có dữ liệu thời gian học tập!"
+        time_text = "Hiện chưa có dữ liệu thời gian học tập trong hệ thống!"
     embed.add_field(name="⏱️ Top Thời Gian Tập Trung", value=time_text, inline=False)
 
-    embed.set_footer(text="Cố gắng chăm chỉ mỗi ngày để leo top nha Ong ơi! 🌸 ( ˘ ³˘)♥")
+    embed.set_footer(text="Cố gắng chăm chỉ mỗi ngày để thăng hạng nha Ong ơi! 🌸 ( ˘ ³˘)♥")
     await ctx.send(embed=embed)
 # --- 🛠️ LỆNH REFRESH / TẠO SERVER & KỶ LUẬT ---
 @bot.command()
